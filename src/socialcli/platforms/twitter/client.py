@@ -1,40 +1,102 @@
 """
-Twitter/X platform client — browser cookie extraction + reverse-engineered API.
+Twitter/X platform client — reverse-engineered GraphQL API.
 
-Login: extract cookies from user's Chrome browser (browser-cookie3)
-       or browser login via Playwright
-Publish: reverse-engineered GraphQL API
-Search/Trending: reverse-engineered API endpoints
+queryId resolution: fallback constants → GitHub community source → JS bundle scan.
+Reference: github/twitter-cli (jackwener/twitter-cli)
 """
 from __future__ import annotations
 
 import json
+import logging
 import re
+import urllib.parse
 from typing import List
 
 import click
 import httpx
 
 from socialcli.platforms.base import (
-    Platform, Content, PublishResult, SearchResult, TrendingItem, AccountInfo,
+    Platform, Content, PublishResult, SearchResult, TrendingItem,
 )
 from socialcli.auth.cookie_store import load_cookies
 from socialcli.auth.browser_login import browser_login
 
-# Twitter/X API constants (reverse-engineered, ref: jackwener/twitter-cli)
-BEARER_TOKEN = "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA"
-BASE_URL = "https://x.com"
-API_URL = "https://x.com/i/api"
-GRAPHQL_URL = "https://x.com/i/api/graphql"
+logger = logging.getLogger(__name__)
 
-# Trending endpoint
-TRENDING_URL = f"{API_URL}/2/guide.json"
+# ── Constants ────────────────────────────────────────────────────────────
 
-DEFAULT_UA = (
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/133.0.0.0 Safari/537.36"
+BEARER_TOKEN = (
+    "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs"
+    "%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA"
 )
+GRAPHQL_URL = "https://x.com/i/api/graphql"
+TRENDING_URL = "https://x.com/i/api/2/guide.json"
+
+# Community-maintained queryId source (fa0311/twitter-openapi)
+_OPENAPI_URL = (
+    "https://raw.githubusercontent.com/fa0311/"
+    "twitter-openapi/refs/heads/main/src/config/placeholder.json"
+)
+
+# Fallback queryIds — last known working values
+_FALLBACK_IDS = {
+    "SearchTimeline": "MJpyQGqgklrVl_0X9gNy3A",
+    "CreateTweet": "bDE2rBtZb3uyrczSZ_pI9g",
+}
+
+# Default feature flags for GraphQL requests
+_FEATURES = {
+    "responsive_web_graphql_exclude_directive_enabled": True,
+    "verified_phone_label_enabled": False,
+    "responsive_web_graphql_timeline_navigation_enabled": True,
+    "longform_notetweets_consumption_enabled": True,
+    "tweet_awards_web_tipping_enabled": False,
+    "view_counts_everywhere_api_enabled": True,
+    "creator_subscriptions_tweet_preview_api_enabled": True,
+    "tweetypie_unmention_optimization_enabled": True,
+    "responsive_web_edit_tweet_api_enabled": True,
+    "graphql_is_translatable_rweb_tweet_is_translatable_enabled": True,
+    "longform_notetweets_rich_text_read_enabled": True,
+    "longform_notetweets_inline_media_enabled": True,
+    "responsive_web_media_download_video_enabled": True,
+    "freedom_of_speech_not_reach_fetch_enabled": True,
+    "standardized_nudges_misinfo": True,
+    "responsive_web_enhance_cards_enabled": False,
+    "responsive_web_twitter_article_tweet_consumption_enabled": True,
+}
+
+# ── queryId resolution ───────────────────────────────────────────────────
+
+_cached_ids: dict[str, str] = {}
+
+
+def _resolve_query_id(operation: str) -> str:
+    """Resolve queryId: cache → GitHub → fallback."""
+    if operation in _cached_ids:
+        return _cached_ids[operation]
+
+    # Try GitHub community source
+    try:
+        resp = httpx.get(_OPENAPI_URL, timeout=8)
+        if resp.status_code == 200:
+            data = resp.json()
+            qid = data.get(operation, {}).get("queryId")
+            if qid:
+                _cached_ids[operation] = qid
+                logger.debug("queryId %s=%s (from GitHub)", operation, qid)
+                return qid
+    except Exception as exc:
+        logger.debug("GitHub queryId fetch failed: %s", exc)
+
+    # Fallback
+    fallback = _FALLBACK_IDS.get(operation, "")
+    if fallback:
+        _cached_ids[operation] = fallback
+        logger.debug("queryId %s=%s (fallback)", operation, fallback)
+    return fallback
+
+
+# ── Platform ─────────────────────────────────────────────────────────────
 
 
 class TwitterPlatform(Platform):
@@ -47,32 +109,29 @@ class TwitterPlatform(Platform):
     SUCCESS_URL = "x.com/home"
 
     def login(self, account: str = "default", **kwargs) -> bool:
-        """Login via browser — user enters credentials, we capture cookies."""
-        headless = kwargs.get("headless", False)
         return browser_login(
             platform=self.name,
             login_url=self.LOGIN_URL,
             success_url_pattern=self.SUCCESS_URL,
             account=account,
-            headless=headless,
+            headless=kwargs.get("headless", False),
         )
 
     def check_login(self, account: str = "default") -> bool:
         cookies = load_cookies(self.name, account)
         if not cookies:
             return False
-        # Twitter requires auth_token and ct0 cookies
         names = {c.get("name") for c in cookies}
-        return "auth_token" in names or "ct0" in names or len(cookies) > 5
+        return "auth_token" in names and "ct0" in names
 
     def _get_headers(self, account: str = "default") -> dict:
-        """Build Twitter API headers with cookie + CSRF token."""
+        """Build Twitter API headers with bearer token + CSRF."""
         cookies = load_cookies(self.name, account) or []
         cookie_str = "; ".join(f"{c['name']}={c['value']}" for c in cookies if "name" in c)
         ct0 = next((c["value"] for c in cookies if c.get("name") == "ct0"), "")
 
         headers = {
-            "User-Agent": DEFAULT_UA,
+            "User-Agent": self.default_ua,
             "Authorization": f"Bearer {BEARER_TOKEN}",
             "X-Twitter-Auth-Type": "OAuth2Session",
             "X-Twitter-Active-User": "yes",
@@ -86,82 +145,20 @@ class TwitterPlatform(Platform):
             headers["X-Csrf-Token"] = ct0
         return headers
 
-    def publish(self, content: Content, account: str = "default") -> PublishResult:
-        """Publish tweet via reverse-engineered GraphQL API."""
-        headers = self._get_headers(account)
-
-        tweet_text = content.text
-        if content.title and content.title not in tweet_text:
-            tweet_text = f"{content.title}\n\n{tweet_text}"
-
-        # CreateTweet GraphQL mutation
-        variables = {
-            "tweet_text": tweet_text,
-            "dark_request": False,
-            "media": {"media_entities": [], "possibly_sensitive": False},
-            "semantic_annotation_ids": [],
-        }
-
-        # TODO: Upload media first if content.images or content.video
-        # For now, text-only publishing
-        if content.images:
-            # Media upload would go here (multipart upload to upload.twitter.com)
-            pass
-
-        payload = {
-            "variables": json.dumps(variables),
-            "features": json.dumps({
-                "community_tweet_creation": False,
-                "tweetypie_unmention_optimization_enabled": True,
-                "responsive_web_edit_tweet_api_enabled": True,
-                "graphql_is_translatable_rweb_tweet_is_translatable_enabled": True,
-                "view_counts_everywhere_api_enabled": True,
-                "longform_notetweets_consumption_enabled": True,
-                "responsive_web_twitter_article_tweet_consumption_enabled": True,
-                "tweet_awards_web_tipping_enabled": False,
-                "creator_subscriptions_quote_tweet_preview_enabled": False,
-                "longform_notetweets_rich_text_read_enabled": True,
-                "longform_notetweets_inline_media_enabled": True,
-                "articles_preview_enabled": True,
-                "responsive_web_graphql_exclude_directive_enabled": True,
-                "verified_phone_label_enabled": False,
-                "freedom_of_speech_not_reach_fetch_enabled": True,
-                "standardized_nudges_misinfo": True,
-                "responsive_web_graphql_timeline_navigation_enabled": True,
-            }),
-            "queryId": "znCbgGaBcIFDlGEhXdFVzg",  # CreateTweet
-        }
-
-        try:
-            resp = httpx.post(
-                f"{GRAPHQL_URL}/znCbgGaBcIFDlGEhXdFVzg/CreateTweet",
-                headers=headers,
-                data=payload,
-                timeout=30,
-            )
-
-            if resp.status_code == 200:
-                data = resp.json()
-                tweet_result = data.get("data", {}).get("create_tweet", {}).get("tweet_results", {}).get("result", {})
-                tweet_id = tweet_result.get("rest_id", "")
-                return PublishResult(
-                    success=True,
-                    platform=self.name,
-                    post_id=tweet_id,
-                    url=f"https://x.com/i/status/{tweet_id}" if tweet_id else "",
-                )
-            else:
-                return PublishResult(
-                    success=False, platform=self.name,
-                    error=f"HTTP {resp.status_code}: {resp.text[:200]}",
-                )
-        except Exception as e:
-            return PublishResult(success=False, platform=self.name, error=str(e))
+    # ── Search ───────────────────────────────────────────────────────────
 
     def search(self, query: str, account: str = "default", **kwargs) -> List[SearchResult]:
-        """Search Twitter via adaptive search API."""
+        """Search Twitter via GraphQL SearchTimeline."""
         headers = self._get_headers(account)
+        if "Cookie" not in headers:
+            logger.debug("twitter search: no cookies, skipping")
+            return []
+
         count = kwargs.get("count", 20)
+        query_id = _resolve_query_id("SearchTimeline")
+        if not query_id:
+            logger.warning("twitter: cannot resolve SearchTimeline queryId")
+            return []
 
         variables = {
             "rawQuery": query,
@@ -170,27 +167,22 @@ class TwitterPlatform(Platform):
             "product": "Latest",
         }
 
-        features = {
-            "responsive_web_graphql_exclude_directive_enabled": True,
-            "verified_phone_label_enabled": False,
-            "responsive_web_graphql_timeline_navigation_enabled": True,
-            "longform_notetweets_consumption_enabled": True,
-            "tweet_awards_web_tipping_enabled": False,
-            "view_counts_everywhere_api_enabled": True,
-        }
-
         params = {
-            "variables": json.dumps(variables),
-            "features": json.dumps(features),
+            "variables": json.dumps(variables, separators=(",", ":")),
+            "features": json.dumps(
+                {k: v for k, v in _FEATURES.items() if v is not False},
+                separators=(",", ":"),
+            ),
         }
 
         try:
             resp = httpx.get(
-                f"{GRAPHQL_URL}/MJpyQGqgklrVl_6rYKQbow/SearchTimeline",
+                f"{GRAPHQL_URL}/{query_id}/SearchTimeline",
                 params=params,
                 headers=headers,
                 timeout=15,
             )
+            logger.debug("twitter search %s: %d", query, resp.status_code)
 
             results = []
             if resp.status_code == 200:
@@ -200,14 +192,22 @@ class TwitterPlatform(Platform):
                     tweet = _parse_tweet_entry(entry)
                     if tweet:
                         results.append(tweet)
+            else:
+                logger.warning("twitter search: HTTP %d %s", resp.status_code, resp.text[:200])
 
             return results
-        except Exception:
+        except Exception as exc:
+            logger.debug("twitter search: %s", exc)
             return []
 
+    # ── Trending ─────────────────────────────────────────────────────────
+
     def trending(self, account: str = "default", **kwargs) -> List[TrendingItem]:
-        """Get Twitter/X trending topics."""
+        """Get Twitter/X trending topics via guide.json."""
         headers = self._get_headers(account)
+        if "Cookie" not in headers:
+            logger.debug("twitter trending: no cookies, skipping")
+            return []
 
         params = {
             "include_profile_interstitial_type": "1",
@@ -228,6 +228,7 @@ class TwitterPlatform(Platform):
 
         try:
             resp = httpx.get(TRENDING_URL, params=params, headers=headers, timeout=15)
+            logger.debug("twitter trending: %d", resp.status_code)
             items = []
 
             if resp.status_code == 200:
@@ -247,16 +248,79 @@ class TwitterPlatform(Platform):
                                 items.append(TrendingItem(
                                     rank=rank,
                                     title=trend["name"],
-                                    url=f"https://x.com/search?q={trend['name']}",
+                                    url=f"https://x.com/search?q={urllib.parse.quote(trend['name'])}",
                                     hot_value=tweet_count,
                                 ))
+            else:
+                logger.warning("twitter trending: HTTP %d", resp.status_code)
 
             return items
-        except Exception:
+        except Exception as exc:
+            logger.debug("twitter trending: %s", exc)
             return []
 
+    # ── Publish ──────────────────────────────────────────────────────────
 
-    # --- CLI subgroup ---
+    def publish(self, content: Content, account: str = "default") -> PublishResult:
+        """Publish tweet via GraphQL CreateTweet mutation."""
+        headers = self._get_headers(account)
+
+        tweet_text = content.text
+        if content.title and content.title not in tweet_text:
+            tweet_text = f"{content.title}\n\n{tweet_text}"
+
+        query_id = _resolve_query_id("CreateTweet")
+        if not query_id:
+            return PublishResult(success=False, platform=self.name, error="Cannot resolve CreateTweet queryId")
+
+        variables = {
+            "tweet_text": tweet_text,
+            "dark_request": False,
+            "media": {"media_entities": [], "possibly_sensitive": False},
+            "semantic_annotation_ids": [],
+        }
+
+        payload = {
+            "variables": json.dumps(variables),
+            "features": json.dumps(
+                {k: v for k, v in _FEATURES.items() if v is not False},
+            ),
+            "queryId": query_id,
+        }
+
+        try:
+            resp = httpx.post(
+                f"{GRAPHQL_URL}/{query_id}/CreateTweet",
+                headers=headers,
+                data=payload,
+                timeout=30,
+            )
+
+            if resp.status_code == 200:
+                data = resp.json()
+                tweet_result = (
+                    data.get("data", {})
+                    .get("create_tweet", {})
+                    .get("tweet_results", {})
+                    .get("result", {})
+                )
+                tweet_id = tweet_result.get("rest_id", "")
+                return PublishResult(
+                    success=True,
+                    platform=self.name,
+                    post_id=tweet_id,
+                    url=f"https://x.com/i/status/{tweet_id}" if tweet_id else "",
+                )
+            else:
+                return PublishResult(
+                    success=False, platform=self.name,
+                    error=f"HTTP {resp.status_code}: {resp.text[:200]}",
+                )
+        except Exception as e:
+            return PublishResult(success=False, platform=self.name, error=str(e))
+
+    # ── CLI subgroup ─────────────────────────────────────────────────────
+
     @property
     def cli_group(self):
         platform = self  # capture for closures
@@ -312,10 +376,11 @@ class TwitterPlatform(Platform):
         return twitter_group
 
 
-# --- Tweet parsing helpers ---
+# ── Helpers ──────────────────────────────────────────────────────────────
+
 
 def _extract_entries(data: dict) -> list:
-    """Extract timeline entries from GraphQL response."""
+    """Extract timeline entries from GraphQL search response."""
     try:
         instructions = (
             data.get("data", {})
@@ -334,13 +399,12 @@ def _extract_entries(data: dict) -> list:
 
 
 def _parse_tweet_entry(entry: dict) -> SearchResult | None:
-    """Parse a single tweet entry."""
+    """Parse a single tweet entry from timeline."""
     try:
         content = entry.get("content", {})
         item = content.get("itemContent", {})
         result = item.get("tweet_results", {}).get("result", {})
 
-        # Handle __typename == "TweetWithVisibilityResults"
         if result.get("__typename") == "TweetWithVisibilityResults":
             result = result.get("tweet", result)
 
@@ -351,6 +415,9 @@ def _parse_tweet_entry(entry: dict) -> SearchResult | None:
         text = legacy.get("full_text", "")
         tweet_id = legacy.get("id_str", result.get("rest_id", ""))
         screen_name = user_legacy.get("screen_name", "")
+
+        if not text and not screen_name:
+            return None
 
         return SearchResult(
             title=text[:200],
