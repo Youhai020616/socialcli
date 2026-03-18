@@ -107,6 +107,43 @@ class TestPublish:
         assert results[0].success is False
         assert "API down" in results[0].error
 
+    def test_parallel_publish_multiple(self, monkeypatch):
+        """Multiple platforms should publish in parallel and return in order."""
+        import time
+        from socialcli.platforms.base import Platform
+
+        call_order = []
+
+        class SlowPlatform(Platform):
+            name = "slow"
+            display_name = "Slow"
+            icon = ""
+            def login(self, **kw): return True
+            def check_login(self, account="default"): return True
+            def publish(self, content, account="default"):
+                call_order.append(self.name)
+                time.sleep(0.05)
+                return PublishResult(success=True, platform=self.name, url=f"https://{self.name}")
+            def search(self, query, **kw): return []
+
+        slow1 = SlowPlatform()
+        slow1.name = "slow1"
+        slow2 = SlowPlatform()
+        slow2.name = "slow2"
+
+        original = registry._platforms.copy()
+        registry.register(slow1)
+        registry.register(slow2)
+        try:
+            results = publisher.publish_all(Content(text="Hello"), ["slow1", "slow2"])
+            assert len(results) == 2
+            assert results[0].platform == "slow1"  # sorted to input order
+            assert results[1].platform == "slow2"
+            assert all(r.success for r in results)
+        finally:
+            registry._platforms.clear()
+            registry._platforms.update(original)
+
 
 class TestHistory:
     def test_history_saved_on_publish(self, mock_platform, setup_env):

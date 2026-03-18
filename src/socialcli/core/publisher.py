@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import json
 import logging
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List
@@ -22,6 +24,29 @@ logger = logging.getLogger(__name__)
 HISTORY_FILE = Path.home() / ".socialcli" / "history.jsonl"
 
 
+def _publish_one(
+    platform_name: str,
+    content: Content,
+    account: str,
+) -> PublishResult:
+    """Publish to a single platform (called from thread pool)."""
+    platform = registry.get(platform_name)
+    if not platform:
+        return PublishResult(success=False, platform=platform_name, error=f"Unknown platform: {platform_name}")
+
+    if not platform.check_login(account):
+        return PublishResult(success=False, platform=platform_name, error=f"Not logged in. Run: social login {platform_name}")
+
+    adapted = content_adapter.adapt(content, platform_name)
+    try:
+        result = platform.publish(adapted, account)
+        _save_history(result, adapted)
+        return result
+    except Exception as e:
+        logger.debug("publish error %s: %s", platform_name, e)
+        return PublishResult(success=False, platform=platform_name, error=str(e))
+
+
 def publish_all(
     content: Content,
     platforms: List[str],
@@ -31,29 +56,20 @@ def publish_all(
     """
     Publish content to multiple platforms.
 
-    Automatically adapts content format for each platform.
+    Uses parallel execution for real publishes (ThreadPoolExecutor).
+    Dry-run is always sequential (no network calls).
     """
     results = []
 
+    # Show warnings for all platforms first
     for platform_name in platforms:
-        platform = registry.get(platform_name)
-        if not platform:
-            results.append(PublishResult(
-                success=False,
-                platform=platform_name,
-                error=f"Unknown platform: {platform_name}",
-            ))
-            continue
-
-        # Validate content
         warnings = content_adapter.validate(content, platform_name)
         for w in warnings:
             console.print(f"  [yellow]⚠ {platform_name}: {w}[/yellow]")
 
-        # Adapt content
-        adapted = content_adapter.adapt(content, platform_name)
-
-        if dry_run:
+    if dry_run:
+        for platform_name in platforms:
+            adapted = content_adapter.adapt(content, platform_name)
             results.append(PublishResult(
                 success=True,
                 platform=platform_name,
@@ -61,30 +77,38 @@ def publish_all(
                 url="",
                 error=f"[DRY RUN] title={adapted.title[:30]!r} text={adapted.text[:50]!r}",
             ))
-            continue
+        return results
 
-        # Check login (only for real publish, not dry-run)
-        if not platform.check_login(account):
-            results.append(PublishResult(
-                success=False,
-                platform=platform_name,
-                error=f"Not logged in. Run: social login {platform_name}",
-            ))
-            continue
+    # Real publish — parallel execution
+    if len(platforms) == 1:
+        # Single platform, no need for thread pool
+        console.print(f"  [dim]Publishing to {platforms[0]}...[/dim]")
+        return [_publish_one(platforms[0], content, account)]
 
-        # Publish
-        try:
-            console.print(f"  [dim]Publishing to {platform.display_name}...[/dim]")
-            result = platform.publish(adapted, account)
-            results.append(result)
-            _save_history(result, adapted)
-        except Exception as e:
-            logger.debug("publish error %s: %s", platform_name, e)
-            results.append(PublishResult(
-                success=False,
-                platform=platform_name,
-                error=str(e),
-            ))
+    console.print(f"  [dim]Publishing to {len(platforms)} platforms in parallel...[/dim]")
+    start = time.monotonic()
+
+    with ThreadPoolExecutor(max_workers=min(len(platforms), 5)) as pool:
+        futures = {
+            pool.submit(_publish_one, name, content, account): name
+            for name in platforms
+        }
+        for future in as_completed(futures):
+            name = futures[future]
+            try:
+                result = future.result()
+                results.append(result)
+                status = "✔" if result.success else "✖"
+                logger.debug("%s %s: %s", status, name, result.url or result.error)
+            except Exception as e:
+                results.append(PublishResult(success=False, platform=name, error=str(e)))
+
+    elapsed = time.monotonic() - start
+    logger.debug("Parallel publish completed in %.1fs", elapsed)
+
+    # Sort results to match input order
+    order = {name: i for i, name in enumerate(platforms)}
+    results.sort(key=lambda r: order.get(r.platform, 999))
 
     return results
 

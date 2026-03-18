@@ -150,6 +150,16 @@ class TestTrending:
         assert result.exit_code == 0
 
 
+class TestHistory:
+    def test_history_empty(self, runner):
+        result = runner.invoke(cli, ["history"])
+        assert result.exit_code == 0
+
+    def test_history_json(self, runner):
+        result = runner.invoke(cli, ["history", "--json"])
+        assert result.exit_code == 0
+
+
 class TestPublishFromFile:
     def test_markdown_file(self, runner, tmp_path):
         md = tmp_path / "post.md"

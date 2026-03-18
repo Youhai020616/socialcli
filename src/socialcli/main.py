@@ -88,6 +88,7 @@ from socialcli.commands.ai import ai
 from socialcli.commands.batch import batch
 from socialcli.commands.monitor import monitor
 from socialcli.commands.trending import trending
+from socialcli.commands.history import history
 
 cli.add_command(login)
 cli.add_command(logout)
@@ -99,3 +100,4 @@ cli.add_command(ai)
 cli.add_command(batch)
 cli.add_command(monitor)
 cli.add_command(trending)
+cli.add_command(history)
