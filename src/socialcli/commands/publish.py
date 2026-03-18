@@ -87,6 +87,15 @@ def publish(text, title, image, video, link, tags, platforms, subreddit,
         output.error("No content provided. Use text argument, --file, --image, or --video")
         raise SystemExit(1)
 
+    # Scheduled publish → add to scheduler instead of publishing now
+    if schedule and not dry_run:
+        from socialcli.core.scheduler import add_task
+        task = add_task(content, platform_list, schedule, account)
+        output.success(f"Scheduled for {schedule} (task {task['id']})")
+        output.dim(f"  Platforms: {', '.join(platform_list)}")
+        output.dim(f"  Run 'social schedule list' to view, 'social schedule run' to execute due tasks")
+        return
+
     output.info(f"Publishing to {len(platform_list)} platform(s): {', '.join(platform_list)}")
     if dry_run:
         output.warn("DRY RUN — nothing will be published")
