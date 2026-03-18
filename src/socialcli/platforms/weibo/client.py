@@ -15,7 +15,7 @@ import httpx
 from socialcli.platforms.base import (
     Platform, Content, PublishResult, SearchResult, TrendingItem, AccountInfo,
 )
-from socialcli.auth.cookie_store import load_cookies, cookie_string, load_account_info
+from socialcli.auth.cookie_store import load_cookies
 from socialcli.auth.browser_login import browser_login
 
 DEFAULT_UA = (
@@ -37,6 +37,7 @@ class WeiboPlatform(Platform):
     name = "weibo"
     display_name = "微博"
     icon = "🔥"
+    base_referer = "https://weibo.com/"
 
     LOGIN_URL = "https://weibo.com/login.php"
     SUCCESS_URL = "weibo.com"
@@ -58,14 +59,8 @@ class WeiboPlatform(Platform):
         return "SUBP" in names or "SUB" in names or len(cookies) > 5
 
     def _get_headers(self, account: str = "default") -> dict:
-        headers = {
-            "User-Agent": DEFAULT_UA,
-            "Referer": "https://weibo.com/",
-            "X-Requested-With": "XMLHttpRequest",
-        }
-        cookie = cookie_string(self.name, account)
-        if cookie:
-            headers["Cookie"] = cookie
+        headers = super()._get_headers(account)
+        headers["X-Requested-With"] = "XMLHttpRequest"
         return headers
 
     def publish(self, content: Content, account: str = "default") -> PublishResult:
@@ -144,15 +139,6 @@ class WeiboPlatform(Platform):
         except Exception:
             return []
 
-    def me(self, account: str = "default") -> AccountInfo:
-        info = load_account_info(self.name, account)
-        if not info:
-            return AccountInfo(platform=self.name, account=account, is_logged_in=False)
-        return AccountInfo(
-            platform=self.name, account=account,
-            nickname=info.get("nickname", ""), user_id=info.get("user_id", ""),
-            is_logged_in=True,
-        )
 
     @property
     def cli_group(self):

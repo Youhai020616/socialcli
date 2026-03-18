@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import List
 import click
 from socialcli.platforms.base import *
-from socialcli.auth.cookie_store import load_cookies, cookie_string, load_account_info
+from socialcli.auth.cookie_store import load_cookies
 from socialcli.auth.browser_login import browser_login
 
 class FacebookPlatform(Platform):
@@ -26,10 +26,6 @@ class FacebookPlatform(Platform):
             return PublishResult(success=False, platform=self.name, error=str(e))
     def search(self, query, account="default", **kw) -> List[SearchResult]:
         return []  # Facebook search requires complex auth
-    def me(self, account="default"):
-        info = load_account_info(self.name, account)
-        if not info: return AccountInfo(platform=self.name, account=account, is_logged_in=False)
-        return AccountInfo(platform=self.name, account=account, nickname=info.get("nickname", ""), user_id=info.get("user_id", ""), is_logged_in=True)
 
     @property
     def cli_group(self):

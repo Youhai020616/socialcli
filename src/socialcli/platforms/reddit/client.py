@@ -8,6 +8,7 @@ Reference: jackwener/rdt-cli (reverse-engineered API + fingerprint)
 from __future__ import annotations
 
 import json
+import logging
 import time
 import random
 from typing import List
@@ -15,12 +16,12 @@ from typing import List
 import click
 import httpx
 
+logger = logging.getLogger(__name__)
+
 from socialcli.platforms.base import (
     Platform, Content, PublishResult, SearchResult, TrendingItem, AccountInfo,
 )
-from socialcli.auth.cookie_store import (
-    load_cookies, save_cookies, cookie_string, load_account_info,
-)
+from socialcli.auth.cookie_store import load_cookies
 from socialcli.auth.browser_login import browser_login
 
 BASE_URL = "https://www.reddit.com"
@@ -34,6 +35,8 @@ class RedditPlatform(Platform):
     name = "reddit"
     display_name = "Reddit"
     icon = "📖"
+    # Reddit requires a descriptive UA; generic browser UAs get 403 on .json endpoints
+    default_ua = "socialcli/0.1.0 (Python; social media CLI; +https://github.com/socialcli)"
 
     LOGIN_URL = "https://www.reddit.com/login/"
     SUCCESS_URL = "reddit.com"
@@ -56,13 +59,8 @@ class RedditPlatform(Platform):
         return "reddit_session" in names or "token_v2" in names or len(cookies) > 5
 
     def _get_headers(self, account: str = "default") -> dict:
-        headers = {
-            "User-Agent": DEFAULT_UA,
-            "Accept": "application/json",
-        }
-        cookie = cookie_string(self.name, account)
-        if cookie:
-            headers["Cookie"] = cookie
+        headers = super()._get_headers(account)
+        headers["Accept"] = "application/json"
         return headers
 
     def _modhash(self, account: str = "default") -> str:
@@ -72,7 +70,8 @@ class RedditPlatform(Platform):
             resp = httpx.get(f"{BASE_URL}/api/me.json", headers=headers, timeout=10)
             data = resp.json()
             return data.get("data", {}).get("modhash", "")
-        except Exception:
+        except Exception as exc:
+            logger.debug("%s modhash: %s", self.name, exc)
             return ""
 
     def publish(self, content: Content, account: str = "default") -> PublishResult:
@@ -181,7 +180,8 @@ class RedditPlatform(Platform):
                 ))
 
             return results
-        except Exception:
+        except Exception as exc:
+            logger.debug("%s: %s", self.name, exc)
             return []
 
     def trending(self, account: str = "default", **kwargs) -> List[TrendingItem]:
@@ -205,7 +205,8 @@ class RedditPlatform(Platform):
                 ))
 
             return items
-        except Exception:
+        except Exception as exc:
+            logger.debug("%s: %s", self.name, exc)
             return []
 
     def like(self, target_id: str, account: str = "default", **kwargs) -> bool:
@@ -220,7 +221,8 @@ class RedditPlatform(Platform):
                 timeout=10,
             )
             return resp.status_code == 200
-        except Exception:
+        except Exception as exc:
+            logger.debug("%s: %s", self.name, exc)
             return False
 
     def comment(self, target_id: str, text: str, account: str = "default", **kwargs) -> bool:
@@ -235,19 +237,9 @@ class RedditPlatform(Platform):
                 timeout=10,
             )
             return resp.status_code == 200
-        except Exception:
+        except Exception as exc:
+            logger.debug("%s: %s", self.name, exc)
             return False
-
-    def me(self, account: str = "default") -> AccountInfo:
-        info = load_account_info(self.name, account)
-        if not info:
-            return AccountInfo(platform=self.name, account=account, is_logged_in=False)
-        return AccountInfo(
-            platform=self.name, account=account,
-            nickname=info.get("nickname", ""),
-            user_id=info.get("user_id", ""),
-            is_logged_in=True,
-        )
 
     # --- CLI subgroup ---
     @property

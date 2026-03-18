@@ -7,10 +7,13 @@ Reference: jackwener/bilibili-cli
 """
 from __future__ import annotations
 
+import logging
 from typing import List
 
 import click
 import httpx
+
+logger = logging.getLogger(__name__)
 
 from socialcli.platforms.base import (
     Platform, Content, PublishResult, SearchResult, TrendingItem, AccountInfo,
@@ -35,6 +38,7 @@ class BilibiliPlatform(Platform):
     name = "bilibili"
     display_name = "B站"
     icon = "📺"
+    base_referer = "https://www.bilibili.com/"
 
     LOGIN_URL = "https://passport.bilibili.com/login"
     SUCCESS_URL = "bilibili.com"
@@ -56,14 +60,8 @@ class BilibiliPlatform(Platform):
         return "SESSDATA" in names or "bili_jct" in names or len(cookies) > 5
 
     def _get_headers(self, account: str = "default") -> dict:
-        headers = {
-            "User-Agent": DEFAULT_UA,
-            "Referer": "https://www.bilibili.com/",
-            "Origin": "https://www.bilibili.com",
-        }
-        cookie = cookie_string(self.name, account)
-        if cookie:
-            headers["Cookie"] = cookie
+        headers = super()._get_headers(account)
+        headers["Origin"] = "https://www.bilibili.com"
         return headers
 
     def publish(self, content: Content, account: str = "default") -> PublishResult:
@@ -122,7 +120,8 @@ class BilibiliPlatform(Platform):
                     ))
 
             return results
-        except Exception:
+        except Exception as exc:
+            logger.debug("%s: %s", self.name, exc)
             return []
 
     def trending(self, account: str = "default", **kwargs) -> List[TrendingItem]:
@@ -155,7 +154,8 @@ class BilibiliPlatform(Platform):
                     ))
 
             return items
-        except Exception:
+        except Exception as exc:
+            logger.debug("%s: %s", self.name, exc)
             return []
 
     def me(self, account: str = "default") -> AccountInfo:
@@ -171,8 +171,8 @@ class BilibiliPlatform(Platform):
                     user_id=str(data.get("mid", "")),
                     is_logged_in=True,
                 )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("%s nav: %s", self.name, exc)
 
         info = load_account_info(self.name, account)
         if info:

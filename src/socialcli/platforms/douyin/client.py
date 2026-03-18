@@ -16,7 +16,7 @@ import httpx
 from socialcli.platforms.base import (
     Platform, Content, PublishResult, SearchResult, TrendingItem, AccountInfo,
 )
-from socialcli.auth.cookie_store import load_cookies, cookie_string, load_account_info
+from socialcli.auth.cookie_store import load_cookies, cookie_string
 from socialcli.auth.browser_login import browser_login
 
 # Douyin API endpoints (reverse-engineered, same as dy-cli)
@@ -147,17 +147,6 @@ class DouyinPlatform(Platform):
         except Exception:
             return []
 
-    def me(self, account: str = "default") -> AccountInfo:
-        info = load_account_info(self.name, account)
-        if not info:
-            return AccountInfo(platform=self.name, account=account, is_logged_in=False)
-        return AccountInfo(
-            platform=self.name,
-            account=account,
-            nickname=info.get("nickname", ""),
-            user_id=info.get("user_id", ""),
-            is_logged_in=True,
-        )
 
     # --- CLI subgroup ---
     @property

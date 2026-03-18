@@ -15,20 +15,16 @@ import httpx
 from socialcli.platforms.base import (
     Platform, Content, PublishResult, SearchResult, TrendingItem, AccountInfo,
 )
-from socialcli.auth.cookie_store import load_cookies, cookie_string, load_account_info
+from socialcli.auth.cookie_store import load_cookies
 from socialcli.auth.browser_login import browser_login
 
-DEFAULT_UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/133.0.0.0 Safari/537.36"
-)
 
 
 class KuaishouPlatform(Platform):
     name = "kuaishou"
     display_name = "快手"
     icon = "⚡"
+    base_referer = "https://cp.kuaishou.com/"
 
     LOGIN_URL = "https://cp.kuaishou.com/"
     SUCCESS_URL = "cp.kuaishou.com/article"
@@ -48,15 +44,7 @@ class KuaishouPlatform(Platform):
             return False
         return len(cookies) > 3
 
-    def _get_headers(self, account: str = "default") -> dict:
-        headers = {
-            "User-Agent": DEFAULT_UA,
-            "Referer": "https://cp.kuaishou.com/",
-        }
-        cookie = cookie_string(self.name, account)
-        if cookie:
-            headers["Cookie"] = cookie
-        return headers
+    # Uses base class _get_headers() with base_referer
 
     def publish(self, content: Content, account: str = "default") -> PublishResult:
         if not content.video:
@@ -102,13 +90,6 @@ class KuaishouPlatform(Platform):
     def trending(self, account: str = "default", **kwargs) -> List[TrendingItem]:
         return []  # Kuaishou doesn't have a simple public trending API
 
-    def me(self, account: str = "default") -> AccountInfo:
-        info = load_account_info(self.name, account)
-        if not info:
-            return AccountInfo(platform=self.name, account=account, is_logged_in=False)
-        return AccountInfo(platform=self.name, account=account,
-                           nickname=info.get("nickname", ""), user_id=info.get("user_id", ""),
-                           is_logged_in=True)
 
     @property
     def cli_group(self):

@@ -73,17 +73,62 @@ class AccountInfo:
     is_logged_in: bool = False
 
 
+DEFAULT_UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/133.0.0.0 Safari/537.36"
+)
+
+
 class Platform(ABC):
     """
     Abstract base for all platform adapters.
 
     Required: login, check_login, publish, search
     Optional: trending, like, comment, follow, download, analytics
+
+    Subclasses can override `default_ua` and `base_referer` to customize
+    the default headers built by `_get_headers()`.
     """
 
     name: str = ""
     display_name: str = ""
     icon: str = ""
+    default_ua: str = DEFAULT_UA
+    base_referer: str = ""
+
+    # --- Common helpers ---
+
+    def _get_headers(self, account: str = "default") -> dict:
+        """Build HTTP headers with UA, optional cookie, optional referer.
+
+        Subclasses that need extra headers (CSRF tokens, etc.) should
+        override this and call ``super()._get_headers(account)`` first.
+        """
+        from socialcli.auth.cookie_store import cookie_string
+
+        headers: dict[str, str] = {"User-Agent": self.default_ua}
+        cookie = cookie_string(self.name, account)
+        if cookie:
+            headers["Cookie"] = cookie
+        if self.base_referer:
+            headers["Referer"] = self.base_referer
+        return headers
+
+    def me(self, account: str = "default") -> AccountInfo:
+        """Get logged-in user info from stored account data."""
+        from socialcli.auth.cookie_store import load_account_info
+
+        info = load_account_info(self.name, account)
+        if not info:
+            return AccountInfo(platform=self.name, account=account, is_logged_in=False)
+        return AccountInfo(
+            platform=self.name,
+            account=account,
+            nickname=info.get("nickname", ""),
+            user_id=info.get("user_id", ""),
+            is_logged_in=True,
+        )
 
     # --- Required methods ---
 
@@ -132,7 +177,3 @@ class Platform(ABC):
     def analytics(self, account: str = "default", **kwargs) -> dict:
         """Get analytics/dashboard data."""
         raise NotImplementedError(f"{self.display_name} does not support analytics")
-
-    def me(self, account: str = "default") -> AccountInfo:
-        """Get logged-in user info."""
-        raise NotImplementedError(f"{self.display_name} does not support me")

@@ -16,7 +16,7 @@ import httpx
 from socialcli.platforms.base import (
     Platform, Content, PublishResult, SearchResult, TrendingItem, AccountInfo,
 )
-from socialcli.auth.cookie_store import load_cookies, cookie_string, load_account_info
+from socialcli.auth.cookie_store import load_cookies
 from socialcli.auth.browser_login import browser_login
 
 DEFAULT_UA = (
@@ -30,6 +30,7 @@ class LinkedinPlatform(Platform):
     name = "linkedin"
     display_name = "LinkedIn"
     icon = "💼"
+    base_referer = "https://www.linkedin.com/"
 
     LOGIN_URL = "https://www.linkedin.com/login"
     SUCCESS_URL = "linkedin.com/feed"
@@ -122,15 +123,6 @@ class LinkedinPlatform(Platform):
         except Exception:
             return []
 
-    def me(self, account: str = "default") -> AccountInfo:
-        info = load_account_info(self.name, account)
-        if not info:
-            return AccountInfo(platform=self.name, account=account, is_logged_in=False)
-        return AccountInfo(
-            platform=self.name, account=account,
-            nickname=info.get("nickname", ""), user_id=info.get("user_id", ""),
-            is_logged_in=True,
-        )
 
     @property
     def cli_group(self):

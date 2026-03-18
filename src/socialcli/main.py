@@ -11,6 +11,8 @@ Usage:
 """
 from __future__ import annotations
 
+import logging
+
 import click
 
 from socialcli import __version__
@@ -57,9 +59,17 @@ class SocialGroup(click.Group):
 
 @click.group(cls=SocialGroup, invoke_without_command=True)
 @click.version_option(version=__version__, prog_name="socialcli")
+@click.option("--verbose", "-v", is_flag=True, help="Enable debug logging")
 @click.pass_context
-def cli(ctx):
+def cli(ctx, verbose):
     """📱 Unified social media CLI — publish, search, trending across all platforms."""
+    # Configure logging
+    level = logging.DEBUG if verbose else logging.WARNING
+    logging.basicConfig(
+        level=level,
+        format="%(levelname)s %(name)s: %(message)s",
+    )
+
     # Load all platform adapters
     registry.load_all()
 
