@@ -116,28 +116,62 @@ class WeiboPlatform(Platform):
             return []
 
     def trending(self, account: str = "default", **kwargs) -> List[TrendingItem]:
-        """Get Weibo hot search."""
-        headers = {"User-Agent": DEFAULT_UA}
-
+        """Get Weibo hot search via Playwright (reliable, no cookie needed)."""
+        import asyncio
         try:
-            resp = httpx.get(HOT_SEARCH_URL, headers=headers, timeout=10)
-            items = []
+            return asyncio.run(self._trending_playwright())
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).debug("weibo trending: %s", exc)
+            return []
 
-            if resp.status_code == 200:
-                data = resp.json()
-                realtime = data.get("data", {}).get("realtime", [])
-                for i, item in enumerate(realtime[:50]):
+    @staticmethod
+    async def _trending_playwright() -> List[TrendingItem]:
+        from playwright.async_api import async_playwright
+
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(headless=True)
+            page = await browser.new_page()
+            try:
+                await page.goto("https://s.weibo.com/top/summary",
+                                wait_until="domcontentloaded", timeout=20000)
+                await page.wait_for_timeout(3000)
+
+                items_raw = await page.evaluate("""
+                () => {
+                    const results = [];
+                    const rows = document.querySelectorAll('td.td-02');
+                    rows.forEach(td => {
+                        const a = td.querySelector('a');
+                        const span = td.querySelector('span');
+                        if (a) {
+                            const title = a.textContent.trim();
+                            const href = a.getAttribute('href') || '';
+                            const hot = span ? span.textContent.trim() : '';
+                            if (title && title.length > 1) {
+                                results.push({
+                                    title: title,
+                                    url: href.startsWith('http') ? href : 'https://s.weibo.com' + href,
+                                    hot_value: hot,
+                                });
+                            }
+                        }
+                    });
+                    return results;
+                }
+                """)
+
+                items = []
+                for i, raw in enumerate(items_raw[:50]):
                     items.append(TrendingItem(
                         rank=i + 1,
-                        title=item.get("word", item.get("note", "")),
-                        url=f"https://s.weibo.com/weibo?q=%23{item.get('word', '')}%23",
-                        hot_value=str(item.get("num", item.get("raw_hot", ""))),
-                        category=item.get("category", ""),
+                        title=raw["title"],
+                        url=raw["url"],
+                        hot_value=raw.get("hot_value", ""),
                     ))
-
-            return items
-        except Exception:
-            return []
+                return items
+            finally:
+                await browser.close()
 
 
     @property

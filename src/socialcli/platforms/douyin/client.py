@@ -1,28 +1,121 @@
 """
-Douyin platform client — wraps dy-cli's API + Playwright engines.
+Douyin platform client — Playwright-based for search/trending (no signature needed).
 
 Login: browser QR scan → save cookies
 Publish: Playwright upload via creator.douyin.com
-Search/Trending: reverse-engineered HTTP API + cookies
+Search/Trending: Playwright browser scraping (bypasses anti-crawl)
 """
 from __future__ import annotations
 
 import json
+import logging
+import re
 from typing import List
 
 import click
-import httpx
 
 from socialcli.platforms.base import (
-    Platform, Content, PublishResult, SearchResult, TrendingItem, AccountInfo,
+    Platform, Content, PublishResult, SearchResult, TrendingItem,
 )
 from socialcli.auth.cookie_store import load_cookies, cookie_string
 from socialcli.auth.browser_login import browser_login
 
-# Douyin API endpoints (reverse-engineered, same as dy-cli)
-SEARCH_URL = "https://www.douyin.com/aweme/v1/web/general/search/single/"
-TRENDING_URL = "https://www.douyin.com/aweme/v1/web/hot/search/list/"
-USER_INFO_URL = "https://creator.douyin.com/web/api/media/user/info/"
+logger = logging.getLogger(__name__)
+
+
+# ── Playwright helpers ────────────────────────────────────────────────
+
+
+async def _douyin_trending() -> List[TrendingItem]:
+    """Scrape Douyin trending from douyin.com/hot via Playwright."""
+    from playwright.async_api import async_playwright
+
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(headless=True)
+        page = await browser.new_page()
+        try:
+            await page.goto("https://www.douyin.com/hot", wait_until="domcontentloaded", timeout=20000)
+            await page.wait_for_timeout(3000)
+
+            items_raw = await page.evaluate("""
+            () => {
+                const results = [];
+                const links = document.querySelectorAll('a[href*="/hot/"]');
+                links.forEach(a => {
+                    const title = a.textContent.trim().replace(/^\\d+/, '').trim();
+                    const href = a.getAttribute('href') || '';
+                    if (title && title.length > 2 && !title.includes('抖音热点')) {
+                        results.push({
+                            title: title,
+                            url: 'https://www.douyin.com' + href,
+                        });
+                    }
+                });
+                return results;
+            }
+            """)
+
+            items = []
+            for i, raw in enumerate(items_raw[:50]):
+                items.append(TrendingItem(
+                    rank=i + 1,
+                    title=raw["title"],
+                    url=raw["url"],
+                ))
+            logger.debug("douyin trending: %d items", len(items))
+            return items
+        finally:
+            await browser.close()
+
+
+async def _douyin_search(query: str, count: int = 20) -> List[SearchResult]:
+    """Search Douyin via Playwright browser scraping."""
+    from playwright.async_api import async_playwright
+    import urllib.parse
+
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(headless=True)
+        page = await browser.new_page()
+        try:
+            url = f"https://www.douyin.com/search/{urllib.parse.quote(query)}?type=video"
+            await page.goto(url, wait_until="domcontentloaded", timeout=20000)
+            await page.wait_for_timeout(5000)
+
+            items_raw = await page.evaluate("""
+            () => {
+                const results = [];
+                // Video cards in search results
+                const cards = document.querySelectorAll('[class*="search-result"] a[href*="/video/"], [class*="VideoCard"] a, a[href*="/video/"]');
+                const seen = new Set();
+                cards.forEach(a => {
+                    const href = a.getAttribute('href') || '';
+                    const match = href.match(/\\/video\\/(\\d+)/);
+                    if (!match || seen.has(match[1])) return;
+                    seen.add(match[1]);
+                    
+                    const title = a.textContent.trim().substring(0, 200);
+                    if (!title || title.length < 3) return;
+                    
+                    results.push({
+                        title: title,
+                        url: href.startsWith('http') ? href : 'https://www.douyin.com' + href,
+                        video_id: match[1],
+                    });
+                });
+                return results;
+            }
+            """)
+
+            results = []
+            for raw in items_raw[:count]:
+                results.append(SearchResult(
+                    title=raw["title"][:100],
+                    url=raw["url"],
+                ))
+            logger.debug("douyin search '%s': %d results", query, len(results))
+            return results
+        finally:
+            await browser.close()
 
 DEFAULT_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
@@ -75,76 +168,24 @@ class DouyinPlatform(Platform):
             return PublishResult(success=False, platform=self.name, error=str(e))
 
     def search(self, query: str, account: str = "default", **kwargs) -> List[SearchResult]:
-        """Search Douyin videos via reverse-engineered API."""
-        cookie = cookie_string(self.name, account)
-        if not cookie:
-            return []
-
-        headers = {
-            "User-Agent": DEFAULT_UA,
-            "Cookie": cookie,
-            "Referer": "https://www.douyin.com/search/" + query,
-        }
-
-        params = {
-            "keyword": query,
-            "search_channel": "aweme_general",
-            "sort_type": kwargs.get("sort", "0"),  # 0=综合, 1=最多点赞, 2=最新发布
-            "publish_time": kwargs.get("time", "0"),
-            "count": kwargs.get("count", "20"),
-            "offset": kwargs.get("offset", "0"),
-        }
-
+        """Search Douyin videos via Playwright (reliable, no signature needed)."""
+        import asyncio
+        count = kwargs.get("count", 20)
         try:
-            resp = httpx.get(SEARCH_URL, params=params, headers=headers, timeout=15)
-            data = resp.json()
-            results = []
-
-            for item in data.get("data", []):
-                aweme = item.get("aweme_info", {})
-                if not aweme:
-                    continue
-                desc = aweme.get("desc", "")
-                aweme_id = aweme.get("aweme_id", "")
-                author = aweme.get("author", {})
-                stats = aweme.get("statistics", {})
-
-                results.append(SearchResult(
-                    title=desc[:100],
-                    url=f"https://www.douyin.com/video/{aweme_id}",
-                    author=author.get("nickname", ""),
-                    likes=stats.get("digg_count", 0),
-                    comments=stats.get("comment_count", 0),
-                    snippet=desc,
-                ))
-
-            return results
-        except Exception:
+            return asyncio.run(_douyin_search(query, count))
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).debug("douyin search: %s", exc)
             return []
 
     def trending(self, account: str = "default", **kwargs) -> List[TrendingItem]:
-        """Get Douyin hot search list."""
-        headers = {"User-Agent": DEFAULT_UA}
-        cookie = cookie_string(self.name, account)
-        if cookie:
-            headers["Cookie"] = cookie
-
+        """Get Douyin trending via Playwright (reliable, no signature needed)."""
+        import asyncio
         try:
-            resp = httpx.get(TRENDING_URL, headers=headers, timeout=10)
-            data = resp.json()
-            items = []
-
-            word_list = data.get("data", {}).get("word_list", [])
-            for i, item in enumerate(word_list[:50]):
-                items.append(TrendingItem(
-                    rank=i + 1,
-                    title=item.get("word", ""),
-                    hot_value=str(item.get("hot_value", "")),
-                    url=f"https://www.douyin.com/search/{item.get('word', '')}",
-                ))
-
-            return items
-        except Exception:
+            return asyncio.run(_douyin_trending())
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).debug("douyin trending: %s", exc)
             return []
 
 
