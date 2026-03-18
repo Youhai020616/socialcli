@@ -18,7 +18,25 @@ from socialcli.platforms.base import (
 from socialcli.auth.cookie_store import load_cookies, cookie_string
 from socialcli.auth.browser_login import browser_login
 
-DEFAULT_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+DEFAULT_UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/145.0.0.0 Safari/537.36"
+)
+
+
+def _xhs_search_id() -> str:
+    """Generate XHS search_id (base36 of timestamp<<64 + random)."""
+    import time, random
+    e = int(time.time() * 1000) << 64
+    t = random.randint(0, 2147483646)
+    num = e + t
+    alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    result = ""
+    while num > 0:
+        result = alphabet[num % 36] + result
+        num //= 36
+    return result
 
 
 class XiaohongshuPlatform(Platform):
@@ -74,28 +92,58 @@ class XiaohongshuPlatform(Platform):
             return PublishResult(success=False, platform=self.name, error=str(e))
 
     def search(self, query: str, account: str = "default", **kwargs) -> List[SearchResult]:
-        """Search Xiaohongshu notes."""
-        cookie = cookie_string(self.name, account)
-        if not cookie:
+        """Search Xiaohongshu notes with xhshow API signing."""
+        import logging
+        logger = logging.getLogger(__name__)
+
+        cookies_raw = load_cookies(self.name, account) or []
+        if not cookies_raw:
             return []
+        cookies_dict = {c["name"]: c["value"] for c in cookies_raw if "name" in c}
+        cookie_str = "; ".join(f"{k}={v}" for k, v in cookies_dict.items())
 
-        headers = {
-            "User-Agent": DEFAULT_UA,
-            "Cookie": cookie,
-            "Referer": "https://www.xiaohongshu.com/",
-            "Origin": "https://www.xiaohongshu.com",
-        }
-
-        search_url = "https://edith.xiaohongshu.com/api/sns/web/v1/search/notes"
+        uri = "/api/sns/web/v1/search/notes"
+        search_url = f"https://edith.xiaohongshu.com{uri}"
         payload = {
             "keyword": query,
             "page": kwargs.get("page", 1),
-            "page_size": kwargs.get("count", 20),
-            "sort": kwargs.get("sort", "general"),  # general / time_descending / popularity_descending
+            "page_size": min(kwargs.get("count", 20), 20),
+            "search_id": _xhs_search_id(),
+            "sort": kwargs.get("sort", "general"),
+            "note_type": 0,
+            "ext_flags": [],
+            "filters": [],
+            "geo": "",
+            "image_formats": ["jpg", "webp", "avif"],
         }
 
+        # Build headers with xhshow signing if available
+        headers = {
+            "User-Agent": DEFAULT_UA,
+            "Cookie": cookie_str,
+            "Content-Type": "application/json",
+            "Origin": "https://www.xiaohongshu.com",
+            "Referer": "https://www.xiaohongshu.com/",
+        }
         try:
-            resp = httpx.post(search_url, json=payload, headers=headers, timeout=15)
+            from xhshow import CryptoConfig, SessionManager, Xhshow
+            config = CryptoConfig().with_overrides(
+                PUBLIC_USERAGENT=DEFAULT_UA,
+                SIGNATURE_DATA_TEMPLATE={"x0": "4.2.6", "x1": "xhs-pc-web", "x2": "macOS", "x3": "", "x4": ""},
+                SIGNATURE_XSCOMMON_TEMPLATE={"s0": 5, "s1": "", "x0": "1", "x1": "4.2.6", "x2": "macOS", "x3": "xhs-pc-web", "x4": "4.86.0", "x5": "", "x6": "", "x7": "", "x8": "", "x9": -596800761, "x10": 0, "x11": "normal"},
+            )
+            xhshow = Xhshow(config)
+            session = SessionManager(config)
+            sign_headers = xhshow.sign_headers_post(uri, cookies_dict, payload=payload, session=session)
+            headers.update(sign_headers)
+            logger.debug("xhs search: signed with xhshow")
+        except ImportError:
+            logger.debug("xhs search: xhshow not available, request may fail")
+
+        try:
+            import json as _json
+            body = _json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+            resp = httpx.post(search_url, content=body, headers=headers, timeout=15)
             data = resp.json()
             results = []
 
