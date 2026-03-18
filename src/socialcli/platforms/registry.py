@@ -47,7 +47,11 @@ def click_error(msg: str) -> SystemExit:
 
 def load_all():
     """Import all platform modules to trigger registration."""
-    for mod in ("douyin", "xiaohongshu", "twitter", "reddit", "tiktok", "linkedin", "bilibili"):
+    for mod in (
+        "douyin", "xiaohongshu", "twitter", "reddit", "tiktok",
+        "linkedin", "bilibili", "weibo", "kuaishou", "youtube",
+        "facebook", "instagram", "threads",
+    ):
         try:
             __import__(f"socialcli.platforms.{mod}")
         except ImportError:
