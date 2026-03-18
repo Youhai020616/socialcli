@@ -4,12 +4,12 @@
 
 **Unified social media CLI — publish, search, and grow across all platforms.**
 
-One command. Seven platforms. Zero API keys required.
+One command. Multiple platforms. Zero API keys required.
 
-[![PyPI](https://img.shields.io/pypi/v/socialcli?color=blue)](https://pypi.org/project/socialcli/)
 [![Python](https://img.shields.io/badge/python-≥3.10-blue?logo=python&logoColor=white)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![Platforms](https://img.shields.io/badge/platforms-7-orange)](#supported-platforms)
+[![Tests](https://img.shields.io/badge/tests-106%20passing-brightgreen)](#)
+[![Platforms](https://img.shields.io/badge/platforms-13-orange)](#supported-platforms)
 
 [Install](#install) · [Quick Start](#quick-start) · [Platforms](#supported-platforms) · [Commands](#commands) · [AI Features](#ai-features) · [License](#license)
 
@@ -31,21 +31,38 @@ SocialCLI takes a different approach:
 
 ## Supported Platforms
 
+### Fully Verified ✅
+
 | Platform | Login | Publish | Search | Trending | Interact |
 |----------|:-----:|:-------:|:------:|:--------:|:--------:|
-| 🎬 **Douyin** (抖音) | QR scan | ✅ | ✅ | ✅ | — |
-| 📕 **Xiaohongshu** (小红书) | QR scan | ✅ | ✅ | — | — |
-| 🐦 **Twitter/X** | Browser | ✅ | ✅ | ✅ | — |
-| 📖 **Reddit** | Browser | ✅ | ✅ | ✅ | ✅ upvote, comment |
-| 🎵 **TikTok** | Browser | ✅ | ✅ | ✅ | — |
-| 💼 **LinkedIn** | Browser | ✅ | ✅ | — | — |
-| 📺 **Bilibili** (B站) | QR scan | ✅ | ✅ | ✅ | — |
+| 📖 **Reddit** | ✅ Instant | ✅ Verified | ✅ | ✅ | ✅ upvote, comment |
+| 🐦 **Twitter/X** | ✅ Instant | ✅ Verified | ✅ | ✅ | — |
+| 📺 **Bilibili** (B站) | ✅ Instant | 🔧 Playwright | ✅ | ✅ | — |
+
+### Partial Support
+
+| Platform | Login | Publish | Search | Trending | Notes |
+|----------|:-----:|:-------:|:------:|:--------:|:------|
+| 📕 **Xiaohongshu** (小红书) | ✅ Instant | 🔧 | 🔧 | — | API signing integrated, needs session prewarm |
+| 💼 **LinkedIn** | ✅ Instant | 🔧 | 🔧 | — | Voyager API auth verified |
+| 🎬 **Douyin** (抖音) | 🔧 | 🔧 | 🔧 | 🔧 | Needs anti-crawl signatures |
+| 🎵 **TikTok** | 🔧 | 🔧 | 🔧 | 🔧 | Needs signatures |
+
+Login marked "✅ Instant" uses `browser-cookie3` to extract cookies from your local Chrome/Firefox — no browser popup needed.
 
 ## Install
 
 ```bash
 pip install socialcli
-playwright install chromium
+playwright install chromium   # For browser-based login/publish
+```
+
+Optional extras:
+
+```bash
+pip install socialcli[browser]   # Instant login from Chrome cookies
+pip install socialcli[twitter]   # Twitter GraphQL support (curl_cffi)
+pip install socialcli[all]       # Everything (browser + twitter + AI)
 ```
 
 Or from source:
@@ -53,7 +70,7 @@ Or from source:
 ```bash
 git clone https://github.com/Youhai020616/socialcli.git
 cd socialcli
-pip install -e .
+pip install -e ".[all]"
 playwright install chromium
 ```
 

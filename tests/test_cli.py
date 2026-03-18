@@ -135,3 +135,32 @@ class TestLogout:
         result = runner.invoke(cli, ["logout", "nonexistent_platform"])
         assert result.exit_code == 0
         assert "No saved session" in result.output
+
+
+class TestTrending:
+    def test_aggregated_trending(self, runner):
+        result = runner.invoke(cli, ["trending", "-p", "reddit,bilibili", "-n", "2", "--json"])
+        assert result.exit_code == 0
+        import json
+        data = json.loads(result.output)
+        assert "reddit" in data or "bilibili" in data
+
+    def test_trending_single_platform(self, runner):
+        result = runner.invoke(cli, ["trending", "-p", "reddit", "-n", "2", "--json"])
+        assert result.exit_code == 0
+
+
+class TestPublishFromFile:
+    def test_markdown_file(self, runner, tmp_path):
+        md = tmp_path / "post.md"
+        md.write_text("# My Title\n\nBody paragraph here.")
+        result = runner.invoke(cli, [
+            "publish", "-f", str(md), "-p", "reddit", "--dry-run",
+        ])
+        assert result.exit_code == 0
+        assert "My Title" in result.output
+        assert "Dry Run" in result.output
+
+    def test_missing_file(self, runner):
+        result = runner.invoke(cli, ["publish", "-f", "/nonexistent.md", "-p", "reddit"])
+        assert result.exit_code == 1

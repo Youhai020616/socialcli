@@ -2,12 +2,11 @@
 
 Unified social media CLI — publish, search, trending, monitor across 13 platforms from one command line.
 
-**Status: v0.1.0 Alpha — early prototype, core API paths NOT yet validated end-to-end.**
+**Status: v0.1.0 Alpha — Reddit + Twitter fully working (login → search → trending → publish verified). Bilibili search/trending working. 106 tests passing.**
 
-> IMPORTANT: Each platform uses reverse-engineered APIs + Playwright browser automation.
+> IMPORTANT: Each platform uses reverse-engineered APIs + browser cookie extraction.
 > These APIs are undocumented and may break at any time. Always read the actual platform
-> client code before modifying. Many API endpoints contain hardcoded tokens/queryIds that
-> will need dynamic resolution before production use.
+> client code before modifying.
 
 ---
 
@@ -140,11 +139,22 @@ social reddit trending          →  RedditPlatform.cli_group → trending comma
 
 ## Authentication
 
-- Login: Playwright opens real browser → user scans QR / enters credentials → cookies captured
-- Storage: `~/.socialcli/accounts/<platform>/<account>.json` (plain JSON, NOT encrypted)
+**Primary method**: `browser-cookie3` extracts cookies from local Chrome/Firefox/Edge/Brave.
+Configured per-platform via `cookie_domain` and `required_cookies` class attributes on `Platform`.
+
+**Fallback**: Playwright opens real browser → user scans QR / enters credentials → cookies captured.
+
+- `login_with_browser_cookies()` — base class method, tries browser extraction first
+- Storage: `~/.socialcli/accounts/<platform>/<account>.json` (plain JSON)
 - Multi-account: `--account` / `-a` flag on all commands
-- Cookie format: list of `{name, value, domain, path, expires, httpOnly, secure, sameSite}`
 - `cookie_string()` converts to HTTP header format: `"name1=val1; name2=val2"`
+
+Platform auth requirements:
+- Reddit: `reddit_session` cookie + modhash CSRF
+- Twitter: `auth_token` + `ct0` cookies + bearer token + x-client-transaction-id
+- Bilibili: `SESSDATA` + `bili_jct` cookies
+- 小红书: `a1` + `web_session` cookies + xhshow API signing
+- LinkedIn: `li_at` + `JSESSIONID` cookies
 
 ---
 
@@ -162,81 +172,61 @@ Functions: `generate(topic, platforms)`, `adapt(text, target_platform)`, `sugges
 
 ## Known Technical Debt & Issues
 
-### Critical — Must Fix Before Any Release
+### Resolved ✅
 
-1. **Zero test coverage**: `tests/` directory is empty. No unit tests, no integration tests, no mocks.
-   Priority: Add tests for `content_adapter`, `cookie_store`, `scheduler`, `batch` first (pure logic, no network).
+- ~~Zero test coverage~~ → **106 tests passing** (10 test files)
+- ~~Silent error swallowing~~ → Reddit + Bilibili use `logger.debug()`, `--verbose` flag added
+- ~~Hardcoded Twitter queryIds~~ → 4-tier dynamic resolution (JS scan → GitHub → fallback)
+- ~~Code duplication~~ → `_get_headers()`, `me()`, `login_with_browser_cookies()` in base class
+- ~~`_platform` scope bug~~ → All 13 platforms use `platform = self` closure capture
 
-2. **Silent error swallowing**: Almost every API call wraps in `except Exception: return []`.
-   Users cannot distinguish "no results" from "request failed / cookie expired / anti-bot blocked".
-   Fix: Add structured logging, return error info, or raise typed exceptions.
+### Remaining — High Priority
 
-3. **Cookie stored in plaintext**: `~/.socialcli/accounts/` contains full session cookies as unencrypted JSON.
-   Plan doc mentions encryption but it is NOT implemented. Consider `keyring` or at minimum file permission enforcement.
+1. **Cookie stored in plaintext**: `~/.socialcli/accounts/` contains session cookies as unencrypted JSON.
+   Consider `keyring` or file permission enforcement.
 
-4. **Hardcoded API tokens that will break**:
-   - `twitter/client.py`: Bearer token and `queryId` (`znCbgGaBcIFDlGEhXdFVzg`) are hardcoded. Twitter rotates queryIds with frontend deploys.
-   - `douyin/client.py`: Missing `a_bogus`, `msToken` anti-crawl signature params — search API calls will likely be blocked.
-   - `linkedin/client.py`: Voyager API GraphQL endpoint and response parsing are speculative / unverified.
+2. **Sync-only sequential publishing**: `publisher.py` publishes in a for-loop.
+   Publishing to many platforms is linearly slow. Consider `concurrent.futures.ThreadPoolExecutor`.
 
-### High — Code Quality
+3. **Douyin/TikTok API signatures**: Missing `a_bogus`, `msToken` anti-crawl params.
+   Search/trending APIs return empty without proper signing.
 
-5. **Massive code duplication across platform clients**:
-   - `_get_headers()` repeated in every client with same pattern
-   - `me()` method is near-identical in all 13 clients
-   - `cli_group` search/trending/publish command boilerplate repeated everywhere
-   Fix: Extract common methods to `Platform` base class or a mixin.
+4. **小红书 search returns empty**: xhshow signing integrated, API returns 200 + code 0,
+   but 0 results. Likely needs session prewarm or additional cookie state.
 
-6. **Sync-only, sequential publishing**: `publisher.py` publishes to platforms in a for-loop.
-   Publishing to 7+ platforms is linearly slow. Plan doc says "并行发布引擎" but actual code is serial.
-   Consider `asyncio.gather` or `concurrent.futures.ThreadPoolExecutor`.
+### Remaining — Medium Priority
 
-7. **`github/` directory not integrated**: Contains full `rdt-cli` project with tests, fingerprint, session management.
-   Reddit client does NOT import from it. Either integrate or remove to reduce confusion.
+5. **Scheduler has no daemon**: Requires manual `social schedule run`. User needs external cron.
 
-### Medium — Functionality Gaps
+6. **LinkedIn Voyager API**: Auth verified (me() works), but search endpoint returns 400/404.
+   API format has changed, needs research.
 
-8. **Scheduler has no daemon**: `scheduler.py` requires manual `social schedule run`. No cron integration,
-   no background process, no systemd service. User must set up external cron.
-
-9. **Monitor is naive polling**: `monitor.py` uses `time.sleep()` loop with no dedup persistence
-   (in-memory `seen_urls` set lost on restart). No webhook/notification support.
-
-10. **Phase 2 platforms are stubs**: The 6 extended platforms (weibo, kuaishou, youtube, facebook, instagram, threads)
-    exist as registered modules but are minimally implemented. Most browser.py files are <60 lines of skeleton code.
-
-11. **Content adapter only covers core 7**: `PLATFORM_RULES` dict does not have entries for the 6 extended platforms.
-    `adapt()` falls back to empty dict, meaning no content transformation for those platforms.
-
-12. **`import re` inside function body**: `bilibili/client.py` imports `re` inside `search()` on every call.
-    Move to module-level import.
+7. **Phase 2 platforms are stubs**: weibo/kuaishou/youtube/facebook/instagram/threads
+   have minimal client code. Not a priority.
 
 ---
 
-## Development Priorities (Recommended Order)
+## Development Priorities (Updated)
 
-### P0 — Validate Core Path
-- [ ] Pick 2 stable platforms (Reddit + Bilibili — public JSON APIs), run end-to-end: login → search → publish
-- [ ] Fix error handling: replace `except Exception: return []` with logging + typed errors
-- [ ] Add basic tests for pure-logic modules: `content_adapter`, `cookie_store`, `scheduler`, `batch`
+### P0 — Done ✅
+- [x] Reddit + Bilibili end-to-end validated
+- [x] Twitter search + trending + publish working
+- [x] 106 tests, error logging, `--verbose`, base class extraction
+- [x] browser-cookie3 instant login for 5 platforms
+- [x] Cross-platform publish verified (Reddit + Twitter simultaneously)
 
-### P1 — Harden Existing Platforms
-- [ ] Twitter: implement dynamic queryId resolution (scrape from main.js bundle)
-- [ ] Douyin: add anti-crawl signature generation (`a_bogus`, `msToken`)
-- [ ] Extract common base class methods (`_get_headers`, `me`, CLI boilerplate)
-- [ ] Add integration test fixtures (mock HTTP responses per platform)
+### P1 — Next
+- [ ] Bilibili publish: verify Playwright video upload flow
+- [ ] 小红书 search: debug session prewarm (API signed correctly, returns 0 results)
+- [ ] Parallel publishing with `concurrent.futures.ThreadPoolExecutor`
+- [ ] Cookie expiry detection + auto re-login prompt
 
-### P2 — Security & Reliability
-- [ ] Encrypt cookie storage (or use system keyring)
-- [ ] Add retry logic with exponential backoff for API calls
-- [ ] Add cookie expiry detection and auto-prompt for re-login
-- [ ] Add `--verbose` / `--debug` flag for detailed logging
-
-### P3 — Feature Completion
-- [ ] Async parallel publishing in `publisher.py`
-- [ ] Scheduler daemon mode or cron helper
-- [ ] Complete Phase 2 platform implementations
-- [ ] Add `content_adapter` rules for extended platforms
+### P2 — Later
+- [ ] Douyin/TikTok: anti-crawl signature (`a_bogus`, `msToken`)
+- [ ] LinkedIn: research new Voyager API search format
+- [ ] Encrypt cookie storage (keyring)
+- [ ] Scheduler daemon mode
+- [ ] CI/CD with GitHub Actions
 
 ---
 
@@ -296,8 +286,9 @@ except httpx.RequestError as e:
 ```
 ~/.socialcli/
   accounts/<platform>/<account>.json    — Cookies + account info (PLAINTEXT)
-  config.json                           — AI config, default_platforms, preferences
+  config.json                           — User settings (AI key, default_platforms)
   schedule.json                         — Scheduled publish tasks
+  history.jsonl                         — Publish history (JSONL, one record per line)
 ```
 
 ---
@@ -305,24 +296,43 @@ except httpx.RequestError as e:
 ## Dev Commands
 
 ```bash
-pip install -e .                        # Install in dev mode
-pip install -e ".[ai]"                  # With AI support (openai)
-pip install -e ".[dev]"                 # With test deps (pytest, pytest-asyncio)
-playwright install chromium             # Required for login + browser publish
+pip install -e ".[all,dev]"             # Install with all extras + test deps
+playwright install chromium             # Required for browser-based publish
 
-pytest                                  # Run tests (currently empty)
-social --help                           # CLI help
-social --version                        # Show version
+# Run tests
+pytest -m "not flaky_network"           # Stable tests only (106)
+pytest                                  # All tests including network-dependent
 
-# Quick smoke test
-social accounts                         # Should list (empty if no logins)
-social trending -p bilibili --json      # Bilibili trending (no login needed for public API)
+# Smoke test
+social --help
+social accounts
+social login reddit                     # Instant from Chrome cookies
+social reddit search "python" -n 3 --json
+social twitter search "AI" -n 3 --json
+social trending -p reddit,bilibili,twitter -n 3 --json
+social publish "Test" -p reddit,twitter --dry-run
+social -v reddit trending -n 2 --json   # With debug logging
 ```
+
+---
+
+## Key Dependencies (Optional)
+
+| Package | Purpose | Install |
+|---------|---------|---------|
+| `browser-cookie3` | Extract cookies from Chrome/Firefox | `pip install socialcli[browser]` |
+| `curl_cffi` | TLS fingerprint for Twitter GraphQL | `pip install socialcli[twitter]` |
+| `xclienttransaction` | Twitter x-client-transaction-id header | included with `[twitter]` |
+| `xhshow` | 小红书 API signing (x-s, x-s-common) | manual: `pip install xhshow` |
+| `beautifulsoup4` | Twitter HTML parsing | included with `[twitter]` |
 
 ---
 
 ## Reference Materials
 
-- `plan/socialcli-plan.md` — Full product spec, architecture, roadmap, commercial strategy
-- `github/rdt-cli/` — Reference Reddit CLI project (NOT imported, for API research only)
-- Platform APIs are reverse-engineered; study browser Network tab for each platform before modifying
+- `plan/socialcli-plan.md` — Full product spec, architecture, roadmap
+- `plan/dev-plan-v2.md` — Sprint-based dev plan (current execution tracker)
+- `github/twitter-cli/` — Twitter GraphQL + x-client-transaction reference
+- `github/xiaohongshu-cli/` — XHS xhshow signing reference
+- `github/rdt-cli/` — Reddit cookie auth reference
+- `github/bilibili-cli/` — Bilibili API reference
