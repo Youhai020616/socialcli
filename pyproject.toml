@@ -36,3 +36,8 @@ social = "socialcli.main:cli"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+markers = [
+    "flaky_network: tests that depend on external APIs and may fail due to rate limiting",
+]

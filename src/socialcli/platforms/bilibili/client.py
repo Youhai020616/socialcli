@@ -82,12 +82,16 @@ class BilibiliPlatform(Platform):
     def search(self, query: str, account: str = "default", **kwargs) -> List[SearchResult]:
         """Search Bilibili videos."""
         headers = self._get_headers(account)
+        headers["Referer"] = "https://search.bilibili.com/"
+        headers.pop("Origin", None)  # Origin can trigger 412 on search
         count = kwargs.get("count", 20)
+        # Bilibili rate-limits large page_size; cap to avoid 412
+        page_size = min(count, 10)
 
         params = {
             "keyword": query,
             "page": 1,
-            "page_size": count,
+            "page_size": page_size,
             "search_type": "video",
         }
 
