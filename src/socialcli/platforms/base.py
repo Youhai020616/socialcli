@@ -153,6 +153,22 @@ class Platform(ABC):
         save_cookies(self.name, cookie_list, account)
         return True
 
+    def cookie_age_days(self, account: str = "default") -> int | None:
+        """Return cookie age in days, or None if no login info."""
+        from socialcli.auth.cookie_store import load_account_info
+        from datetime import datetime, timezone
+
+        info = load_account_info(self.name, account)
+        if not info or not info.get("login_time"):
+            return None
+        try:
+            dt = datetime.fromisoformat(info["login_time"])
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return (datetime.now(timezone.utc) - dt).days
+        except Exception:
+            return None
+
     def _get_headers(self, account: str = "default") -> dict:
         """Build HTTP headers with UA, optional cookie, optional referer.
 

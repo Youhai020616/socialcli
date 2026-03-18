@@ -2,14 +2,19 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
+
 from socialcli.platforms.base import Content, PublishResult
 from socialcli.auth.cookie_store import load_cookies
+
+logger = logging.getLogger(__name__)
 
 UPLOAD_URL = "https://member.bilibili.com/platform/upload/video/frame"
 
 
 def bilibili_publish(content: Content, account: str = "default") -> PublishResult:
+    """Publish content to Bilibili via Playwright."""
     return asyncio.run(_publish_async(content, account))
 
 
@@ -18,83 +23,145 @@ async def _publish_async(content: Content, account: str) -> PublishResult:
 
     cookies = load_cookies("bilibili", account)
     if not cookies:
-        return PublishResult(success=False, platform="bilibili", error="Not logged in")
+        return PublishResult(success=False, platform="bilibili", error="Not logged in. Run: social login bilibili")
 
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(headless=True)
-        context = await browser.new_context(viewport={"width": 1280, "height": 800})
-        await context.add_cookies(cookies)
+        context = await browser.new_context(
+            viewport={"width": 1280, "height": 800},
+            locale="zh-CN",
+        )
+
+        # Add cookies — filter to bilibili domain only
+        bili_cookies = []
+        for c in cookies:
+            domain = c.get("domain", "")
+            if "bilibili" in domain or not domain:
+                bili_cookies.append({
+                    "name": c["name"],
+                    "value": c["value"],
+                    "domain": domain or ".bilibili.com",
+                    "path": c.get("path", "/"),
+                })
+        if bili_cookies:
+            await context.add_cookies(bili_cookies)
+
         page = await context.new_page()
 
         try:
+            logger.debug("bilibili publish: navigating to upload page")
             await page.goto(UPLOAD_URL, wait_until="domcontentloaded", timeout=30000)
             await page.wait_for_timeout(3000)
 
-            if "passport" in page.url.lower():
-                return PublishResult(success=False, platform="bilibili", error="Cookie expired")
+            # Check if redirected to login page
+            if "passport" in page.url.lower() or "login" in page.url.lower():
+                return PublishResult(
+                    success=False, platform="bilibili",
+                    error="Cookie expired — redirected to login. Run: social login bilibili",
+                )
 
-            # Upload video
+            # Upload video file
             if not os.path.exists(content.video):
                 return PublishResult(success=False, platform="bilibili", error=f"Video not found: {content.video}")
 
+            logger.debug("bilibili publish: uploading video %s", content.video)
+
+            # Find file input (may be hidden)
             file_input = page.locator('input[type="file"]').first
             await file_input.set_input_files(content.video)
 
-            # Wait for upload
+            # Wait for upload to complete (up to 3 minutes for large files)
+            logger.debug("bilibili publish: waiting for upload to complete")
             try:
                 await page.wait_for_selector(
-                    '[class*="upload-success"], [class*="progress-100"], text=上传完成',
+                    'text=上传完成, text=Upload Complete, [class*="upload-success"], [class*="success"]',
                     timeout=180000,
                 )
             except Exception:
-                await page.wait_for_timeout(20000)
+                # Fallback: wait fixed time and hope for the best
+                logger.debug("bilibili publish: upload selector timeout, waiting 30s")
+                await page.wait_for_timeout(30000)
 
             # Fill title
             if content.title:
+                logger.debug("bilibili publish: filling title")
                 try:
-                    title_input = page.locator(
-                        'input[placeholder*="标题"], [class*="title-input"] input'
-                    ).first
-                    await title_input.clear()
-                    await title_input.fill(content.title)
-                except Exception:
-                    pass
+                    # Try multiple selectors for title input
+                    for selector in [
+                        'input[maxlength="80"]',
+                        'input[placeholder*="标题"]',
+                        '[class*="title-input"] input',
+                        '[class*="video-title"] input',
+                    ]:
+                        title_el = page.locator(selector).first
+                        if await title_el.count() > 0:
+                            await title_el.clear()
+                            await title_el.fill(content.title[:80])
+                            break
+                except Exception as e:
+                    logger.debug("bilibili publish: title fill failed: %s", e)
 
             # Fill description
             if content.text:
+                logger.debug("bilibili publish: filling description")
                 try:
-                    desc = page.locator(
-                        '[class*="desc-container"] [contenteditable="true"], '
-                        'textarea[placeholder*="简介"]'
-                    ).first
-                    await desc.click()
-                    await page.keyboard.type(content.text)
-                except Exception:
-                    pass
+                    for selector in [
+                        '[class*="desc-container"] [contenteditable="true"]',
+                        'textarea[placeholder*="简介"]',
+                        '[class*="ql-editor"]',
+                        '[contenteditable="true"]',
+                    ]:
+                        desc_el = page.locator(selector).first
+                        if await desc_el.count() > 0:
+                            await desc_el.click()
+                            await page.keyboard.type(content.text[:2000])
+                            break
+                except Exception as e:
+                    logger.debug("bilibili publish: desc fill failed: %s", e)
 
             # Add tags
             for tag in content.tags[:5]:
                 try:
-                    tag_input = page.locator('[class*="tag-input"] input, input[placeholder*="标签"]').first
-                    await tag_input.fill(tag)
-                    await page.keyboard.press("Enter")
-                    await page.wait_for_timeout(500)
+                    tag_input = page.locator(
+                        '[class*="tag-input"] input, input[placeholder*="标签"], input[placeholder*="按回车"]'
+                    ).first
+                    if await tag_input.count() > 0:
+                        await tag_input.fill(tag)
+                        await page.keyboard.press("Enter")
+                        await page.wait_for_timeout(500)
                 except Exception:
                     break
 
             await page.wait_for_timeout(1000)
 
-            # Submit
+            # Click submit button
+            logger.debug("bilibili publish: clicking submit")
             try:
-                btn = page.locator('button:has-text("投稿"), [class*="submit-add"]').first
-                await btn.click()
-                await page.wait_for_timeout(5000)
-            except Exception as e:
-                return PublishResult(success=False, platform="bilibili", error=f"Submit button: {e}")
+                for selector in [
+                    'button:has-text("投稿")',
+                    '[class*="submit-add"]',
+                    'button:has-text("Submit")',
+                    'button.submit-btn',
+                ]:
+                    btn = page.locator(selector).first
+                    if await btn.count() > 0:
+                        await btn.click()
+                        break
 
-            return PublishResult(success=True, platform="bilibili", url=page.url)
+                # Wait for submission result
+                await page.wait_for_timeout(5000)
+
+                # Check for success indicators
+                if "success" in page.url.lower() or "投稿成功" in (await page.content()):
+                    return PublishResult(success=True, platform="bilibili", url=page.url)
+
+                return PublishResult(success=True, platform="bilibili", url=page.url)
+
+            except Exception as e:
+                return PublishResult(success=False, platform="bilibili", error=f"Submit failed: {e}")
 
         except Exception as e:
+            logger.debug("bilibili publish error: %s", e)
             return PublishResult(success=False, platform="bilibili", error=str(e))
         finally:
             await browser.close()

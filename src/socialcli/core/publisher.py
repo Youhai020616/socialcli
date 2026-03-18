@@ -37,14 +37,22 @@ def _publish_one(
     if not platform.check_login(account):
         return PublishResult(success=False, platform=platform_name, error=f"Not logged in. Run: social login {platform_name}")
 
+    # Cookie age warning
+    age = platform.cookie_age_days(account)
+    if age is not None and age >= 7:
+        console.print(f"  [yellow]⚠ {platform_name}: cookies are {age}d old, consider: social login {platform_name}[/yellow]")
+
     adapted = content_adapter.adapt(content, platform_name)
     try:
         result = platform.publish(adapted, account)
         _save_history(result, adapted)
+        # If publish failed, add helpful hint
+        if not result.success:
+            result.error = _friendly_error(result.error, platform_name)
         return result
     except Exception as e:
         logger.debug("publish error %s: %s", platform_name, e)
-        return PublishResult(success=False, platform=platform_name, error=str(e))
+        return PublishResult(success=False, platform=platform_name, error=_friendly_error(str(e), platform_name))
 
 
 def publish_all(
@@ -137,6 +145,28 @@ def print_results(results: List[PublishResult]) -> None:
     success = sum(1 for r in results if r.success)
     total = len(results)
     console.print(f"\n  [bold]{success}/{total} platforms published successfully.[/bold]\n")
+
+
+_ERROR_HINTS = {
+    "USER_REQUIRED": "Cookie expired. Run: social login {platform}",
+    "RATELIMIT": "Rate limited. Wait a few minutes and try again.",
+    "403": "Access denied — cookie may have expired. Run: social login {platform}",
+    "401": "Unauthorized — cookie expired. Run: social login {platform}",
+    "Cookie expired": "Run: social login {platform}",
+    "Connection refused": "Network error. Check your internet connection.",
+    "timed out": "Request timed out. Try again later.",
+    "timeout": "Request timed out. Try again later.",
+}
+
+
+def _friendly_error(error: str, platform_name: str) -> str:
+    """Map known error patterns to user-friendly messages."""
+    if not error:
+        return error
+    for pattern, hint in _ERROR_HINTS.items():
+        if pattern.lower() in error.lower():
+            return hint.format(platform=platform_name)
+    return error
 
 
 def _save_history(result: PublishResult, content: Content) -> None:

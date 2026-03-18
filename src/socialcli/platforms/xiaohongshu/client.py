@@ -93,7 +93,9 @@ class XiaohongshuPlatform(Platform):
 
     def search(self, query: str, account: str = "default", **kwargs) -> List[SearchResult]:
         """Search Xiaohongshu notes with xhshow API signing."""
+        import json as _json
         import logging
+        import urllib.parse
         logger = logging.getLogger(__name__)
 
         cookies_raw = load_cookies(self.name, account) or []
@@ -117,14 +119,26 @@ class XiaohongshuPlatform(Platform):
             "image_formats": ["jpg", "webp", "avif"],
         }
 
-        # Build headers with xhshow signing if available
+        # Full browser-like headers (matching xiaohongshu-cli reference)
         headers = {
-            "User-Agent": DEFAULT_UA,
-            "Cookie": cookie_str,
-            "Content-Type": "application/json",
-            "Origin": "https://www.xiaohongshu.com",
-            "Referer": "https://www.xiaohongshu.com/",
+            "user-agent": DEFAULT_UA,
+            "content-type": "application/json;charset=UTF-8",
+            "cookie": cookie_str,
+            "origin": "https://www.xiaohongshu.com",
+            "referer": f"https://www.xiaohongshu.com/search_result?keyword={urllib.parse.quote(query)}&source=web_search_result_notes",
+            "sec-ch-ua": '"Not:A-Brand";v="99", "Google Chrome";v="145", "Chromium";v="145"',
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": '"macOS"',
+            "sec-fetch-dest": "empty",
+            "sec-fetch-mode": "cors",
+            "sec-fetch-site": "same-site",
+            "accept": "application/json, text/plain, */*",
+            "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
+            "dnt": "1",
+            "priority": "u=1, i",
         }
+
+        # Add xhshow signing headers
         try:
             from xhshow import CryptoConfig, SessionManager, Xhshow
             config = CryptoConfig().with_overrides(
@@ -141,9 +155,9 @@ class XiaohongshuPlatform(Platform):
             logger.debug("xhs search: xhshow not available, request may fail")
 
         try:
-            import json as _json
             body = _json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
             resp = httpx.post(search_url, content=body, headers=headers, timeout=15)
+            logger.debug("xhs search: %d, len=%d", resp.status_code, len(resp.content))
             data = resp.json()
             results = []
 

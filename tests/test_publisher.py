@@ -26,6 +26,7 @@ def mock_platform(monkeypatch):
     plat.display_name = "MockPlatform"
     plat.icon = "🧪"
     plat.check_login.return_value = True
+    plat.cookie_age_days.return_value = 0
     plat.publish.return_value = PublishResult(
         success=True, platform="mockplat", post_id="123", url="https://mock/123",
     )
