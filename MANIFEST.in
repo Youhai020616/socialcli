@@ -1,0 +1,7 @@
+include LICENSE
+include README.md
+recursive-include src *.py
+recursive-exclude github *
+recursive-exclude plan *
+recursive-exclude tests *
+exclude AGENTS.md

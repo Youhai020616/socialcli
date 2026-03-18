@@ -46,6 +46,14 @@ social = "socialcli.main:cli"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools]
+# Exclude reference projects, plans, and test data from distribution
+[tool.setuptools.package-data]
+socialcli = ["py.typed"]
+
+[tool.setuptools.exclude-package-data]
+"*" = ["*.pyc"]
+
 [tool.pytest.ini_options]
 markers = [
     "flaky_network: tests that depend on external APIs and may fail due to rate limiting",

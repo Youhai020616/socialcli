@@ -160,6 +160,13 @@ class TestHistory:
         assert result.exit_code == 0
 
 
+class TestStatus:
+    def test_status(self, runner):
+        result = runner.invoke(cli, ["status"])
+        assert result.exit_code == 0
+        assert "SocialCLI" in result.output
+
+
 class TestPublishFromFile:
     def test_markdown_file(self, runner, tmp_path):
         md = tmp_path / "post.md"

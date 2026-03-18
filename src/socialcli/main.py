@@ -74,7 +74,26 @@ def cli(ctx, verbose):
     registry.load_all()
 
     if ctx.invoked_subcommand is None:
-        click.echo(ctx.get_help())
+        # Show welcome guide if no accounts exist
+        from socialcli.auth.cookie_store import list_accounts
+        accts = list_accounts()
+        if not accts:
+            click.echo(BANNER)
+            click.echo("  Welcome! No accounts found. Get started:\n")
+            click.echo("    social login reddit      Extract cookies from Chrome (instant)")
+            click.echo("    social login twitter     Extract cookies from Chrome (instant)")
+            click.echo("    social login bilibili    Extract cookies from Chrome (instant)")
+            click.echo()
+            click.echo("  After login:")
+            click.echo("    social reddit search \"python\" -n 5")
+            click.echo("    social trending -p reddit,twitter,bilibili")
+            click.echo("    social publish \"Hello!\" -p reddit,twitter --dry-run")
+            click.echo()
+            click.echo("  Install extras for best experience:")
+            click.echo("    pip install socialcli[all]")
+            click.echo()
+        else:
+            click.echo(ctx.get_help())
 
 
 # Register built-in commands
@@ -89,6 +108,7 @@ from socialcli.commands.batch import batch
 from socialcli.commands.monitor import monitor
 from socialcli.commands.trending import trending
 from socialcli.commands.history import history
+from socialcli.commands.status import status
 
 cli.add_command(login)
 cli.add_command(logout)
@@ -101,3 +121,4 @@ cli.add_command(batch)
 cli.add_command(monitor)
 cli.add_command(trending)
 cli.add_command(history)
+cli.add_command(status)
