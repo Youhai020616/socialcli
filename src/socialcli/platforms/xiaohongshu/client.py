@@ -180,9 +180,78 @@ class XiaohongshuPlatform(Platform):
             return []
 
     def trending(self, account: str = "default", **kwargs) -> List[TrendingItem]:
-        """Get Xiaohongshu trending topics."""
-        # XHS doesn't have a public trending API — use search suggestions
-        return []
+        """Get Xiaohongshu trending notes via homefeed API."""
+        import json as _json
+        import logging
+        logger = logging.getLogger(__name__)
+
+        cookies_raw = load_cookies(self.name, account) or []
+        if not cookies_raw:
+            return []
+        cookies_dict = {c["name"]: c["value"] for c in cookies_raw if "name" in c}
+        cookie_str = "; ".join(f"{k}={v}" for k, v in cookies_dict.items())
+
+        uri = "/api/sns/web/v1/homefeed"
+        count = kwargs.get("count", 20)
+        payload = {
+            "cursor_score": "",
+            "num": min(count, 40),
+            "refresh_type": 1,
+            "note_index": 0,
+            "unread_begin_note_id": "",
+            "unread_end_note_id": "",
+            "unread_note_count": 0,
+            "category": "homefeed_recommend",
+            "image_formats": ["jpg", "webp", "avif"],
+        }
+
+        headers = {
+            "user-agent": DEFAULT_UA,
+            "content-type": "application/json;charset=UTF-8",
+            "cookie": cookie_str,
+            "origin": "https://www.xiaohongshu.com",
+            "referer": "https://www.xiaohongshu.com/",
+        }
+
+        # Sign with xhshow if available
+        try:
+            from xhshow import CryptoConfig, SessionManager, Xhshow
+            config = CryptoConfig().with_overrides(
+                PUBLIC_USERAGENT=DEFAULT_UA,
+                SIGNATURE_DATA_TEMPLATE={"x0": "4.2.6", "x1": "xhs-pc-web", "x2": "macOS", "x3": "", "x4": ""},
+                SIGNATURE_XSCOMMON_TEMPLATE={"s0": 5, "s1": "", "x0": "1", "x1": "4.2.6", "x2": "macOS", "x3": "xhs-pc-web", "x4": "4.86.0", "x5": "", "x6": "", "x7": "", "x8": "", "x9": -596800761, "x10": 0, "x11": "normal"},
+            )
+            sign_headers = Xhshow(config).sign_headers_post(uri, cookies_dict, payload=payload, session=SessionManager(config))
+            headers.update(sign_headers)
+        except ImportError:
+            pass
+
+        try:
+            body = _json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+            resp = httpx.post(f"https://edith.xiaohongshu.com{uri}", content=body, headers=headers, timeout=15)
+            data = resp.json()
+            items = []
+
+            for i, item in enumerate(data.get("data", {}).get("items", [])[:count]):
+                note = item.get("note_card", {})
+                user = note.get("user", {})
+                interact = note.get("interact_info", {})
+                note_id = item.get("id", "")
+                liked = interact.get("liked_count", "0")
+
+                items.append(TrendingItem(
+                    rank=i + 1,
+                    title=note.get("display_title", "")[:100],
+                    url=f"https://www.xiaohongshu.com/explore/{note_id}" if note_id else "",
+                    hot_value=f"{liked} likes",
+                    category=user.get("nickname", ""),
+                ))
+
+            logger.debug("xhs trending: %d items", len(items))
+            return items
+        except Exception as exc:
+            logger.debug("xhs trending: %s", exc)
+            return []
 
 
     # --- CLI subgroup ---
@@ -192,8 +261,22 @@ class XiaohongshuPlatform(Platform):
 
         @click.group(name="xhs")
         def xhs_group():
-            """📕 小红书 — search, publish"""
+            """📕 小红书 — search, trending, publish"""
             pass
+
+        @xhs_group.command()
+        @click.option("--count", "-n", default=20)
+        @click.option("--json", "as_json", is_flag=True)
+        @click.option("--account", "-a", default="default")
+        def trending(count, as_json, account):
+            """Get Xiaohongshu recommended notes (热门推荐)."""
+            from socialcli.utils.output import print_json, print_table
+            items = platform.trending(account, count=count)
+            if as_json:
+                print_json([t.__dict__ for t in items])
+            else:
+                rows = [[str(t.rank), t.title[:40], t.category, t.hot_value] for t in items]
+                print_table("📕 小红书推荐", ["#", "Title", "Author", "Likes"], rows)
 
         @xhs_group.command()
         @click.argument("query")
