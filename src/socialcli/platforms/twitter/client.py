@@ -68,10 +68,53 @@ _FEATURES = {
 # ── queryId resolution ───────────────────────────────────────────────────
 
 _cached_ids: dict[str, str] = {}
+_bundles_scanned = False
+
+
+def _scan_js_bundles() -> None:
+    """Scan x.com JS bundles for live queryIds using curl_cffi."""
+    global _bundles_scanned
+    if _bundles_scanned:
+        return
+    _bundles_scanned = True
+
+    try:
+        from curl_cffi import requests as cffi_requests
+    except ImportError:
+        logger.debug("curl_cffi not available for JS bundle scan")
+        return
+
+    try:
+        resp = cffi_requests.get("https://x.com", impersonate="chrome", timeout=15)
+        script_pattern = re.compile(
+            r'(?:src|href)="(https://abs\.twimg\.com/responsive-web/client-web[^"]+\.js)"'
+        )
+        scripts = script_pattern.findall(resp.text)
+        logger.debug("Found %d JS bundles on x.com", len(scripts))
+
+        op_pattern = re.compile(
+            r'queryId:\s*"([A-Za-z0-9_-]+)"[^}]{0,200}operationName:\s*"([^"]+)"'
+        )
+        for script_url in scripts[:15]:
+            try:
+                bundle = cffi_requests.get(script_url, impersonate="chrome", timeout=10).text
+                for match in op_pattern.finditer(bundle):
+                    qid, op = match.group(1), match.group(2)
+                    _cached_ids.setdefault(op, qid)
+            except Exception:
+                continue
+        logger.debug("JS bundle scan: cached %d queryIds", len(_cached_ids))
+    except Exception as exc:
+        logger.debug("JS bundle scan failed: %s", exc)
 
 
 def _resolve_query_id(operation: str) -> str:
-    """Resolve queryId: cache → GitHub → fallback."""
+    """Resolve queryId: cache → JS bundles → GitHub → fallback."""
+    if operation in _cached_ids:
+        return _cached_ids[operation]
+
+    # Try JS bundle scan (most reliable, gets live IDs)
+    _scan_js_bundles()
     if operation in _cached_ids:
         return _cached_ids[operation]
 
@@ -154,6 +197,46 @@ class TwitterPlatform(Platform):
             headers["X-Csrf-Token"] = ct0
         return headers
 
+    def _graphql_get(self, operation: str, variables: dict, headers: dict) -> dict | None:
+        """Execute a GraphQL GET request. Uses curl_cffi if available (TLS fingerprint)."""
+        query_id = _resolve_query_id(operation)
+        if not query_id:
+            logger.warning("twitter: cannot resolve %s queryId", operation)
+            return None
+
+        features = {k: v for k, v in _FEATURES.items() if v is not False}
+        url = "%s/%s/%s?variables=%s&features=%s" % (
+            GRAPHQL_URL, query_id, operation,
+            urllib.parse.quote(json.dumps(variables, separators=(",", ":"))),
+            urllib.parse.quote(json.dumps(features, separators=(",", ":"))),
+        )
+
+        # Prefer curl_cffi (TLS fingerprint) over httpx (blocked by Cloudflare)
+        try:
+            from curl_cffi import requests as cffi_requests
+            resp = cffi_requests.get(url, headers=headers, impersonate="chrome", timeout=15)
+            logger.debug("twitter %s (curl_cffi): %d, len=%d", operation, resp.status_code, len(resp.content))
+            if resp.status_code == 200 and resp.content:
+                return resp.json()
+            if resp.text:
+                logger.debug("twitter %s body: %s", operation, resp.text[:200])
+            return None
+        except ImportError:
+            pass
+        except Exception as exc:
+            logger.debug("twitter %s curl_cffi error: %s", operation, exc)
+
+        # Fallback to httpx (may get 404 due to TLS fingerprint)
+        try:
+            resp = httpx.get(url, headers=headers, timeout=15)
+            logger.debug("twitter %s (httpx): %d", operation, resp.status_code)
+            if resp.status_code == 200 and resp.content:
+                return resp.json()
+            return None
+        except Exception as exc:
+            logger.debug("twitter %s httpx error: %s", operation, exc)
+            return None
+
     # ── Search ───────────────────────────────────────────────────────────
 
     def search(self, query: str, account: str = "default", **kwargs) -> List[SearchResult]:
@@ -164,11 +247,6 @@ class TwitterPlatform(Platform):
             return []
 
         count = kwargs.get("count", 20)
-        query_id = _resolve_query_id("SearchTimeline")
-        if not query_id:
-            logger.warning("twitter: cannot resolve SearchTimeline queryId")
-            return []
-
         variables = {
             "rawQuery": query,
             "count": count,
@@ -176,34 +254,15 @@ class TwitterPlatform(Platform):
             "product": "Latest",
         }
 
-        params = {
-            "variables": json.dumps(variables, separators=(",", ":")),
-            "features": json.dumps(
-                {k: v for k, v in _FEATURES.items() if v is not False},
-                separators=(",", ":"),
-            ),
-        }
-
         try:
-            resp = httpx.get(
-                f"{GRAPHQL_URL}/{query_id}/SearchTimeline",
-                params=params,
-                headers=headers,
-                timeout=15,
-            )
-            logger.debug("twitter search %s: %d", query, resp.status_code)
-
+            data = self._graphql_get("SearchTimeline", variables, headers)
             results = []
-            if resp.status_code == 200:
-                data = resp.json()
+            if data:
                 entries = _extract_entries(data)
                 for entry in entries[:count]:
                     tweet = _parse_tweet_entry(entry)
                     if tweet:
                         results.append(tweet)
-            else:
-                logger.warning("twitter search: HTTP %d %s", resp.status_code, resp.text[:200])
-
             return results
         except Exception as exc:
             logger.debug("twitter search: %s", exc)

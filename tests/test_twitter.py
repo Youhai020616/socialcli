@@ -5,6 +5,7 @@ import json
 import pytest
 from unittest.mock import patch, MagicMock
 
+from socialcli.platforms.twitter import client as twitter_client
 from socialcli.platforms.twitter.client import (
     _resolve_query_id,
     _cached_ids,
@@ -17,15 +18,18 @@ from socialcli.platforms.twitter.client import (
 
 @pytest.fixture(autouse=True)
 def clear_cache():
-    """Clear queryId cache between tests."""
+    """Clear queryId cache and bundle scan state between tests."""
     _cached_ids.clear()
+    twitter_client._bundles_scanned = False
     yield
     _cached_ids.clear()
+    twitter_client._bundles_scanned = False
 
 
 class TestQueryIdResolution:
-    def test_fallback_when_github_unreachable(self):
-        """Should return fallback queryId when GitHub is unreachable."""
+    def test_fallback_when_all_sources_fail(self):
+        """Should return fallback queryId when all remote sources fail."""
+        twitter_client._bundles_scanned = True  # Skip JS scan
         with patch("socialcli.platforms.twitter.client.httpx.get", side_effect=Exception("timeout")):
             qid = _resolve_query_id("SearchTimeline")
         assert qid == _FALLBACK_IDS["SearchTimeline"]
@@ -39,7 +43,8 @@ class TestQueryIdResolution:
         mock_get.assert_not_called()
 
     def test_github_source(self):
-        """Should fetch from GitHub when cache is empty."""
+        """Should fetch from GitHub when cache and JS scan are empty."""
+        twitter_client._bundles_scanned = True  # Skip JS scan
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.json.return_value = {
@@ -52,6 +57,7 @@ class TestQueryIdResolution:
 
     def test_unknown_operation_returns_empty(self):
         """Unknown operation with no fallback should return empty string."""
+        twitter_client._bundles_scanned = True  # Skip JS scan
         with patch("socialcli.platforms.twitter.client.httpx.get", side_effect=Exception("nope")):
             qid = _resolve_query_id("NonexistentOperation")
         assert qid == ""
