@@ -69,6 +69,52 @@ _FEATURES = {
 
 _cached_ids: dict[str, str] = {}
 _bundles_scanned = False
+_client_transaction = None  # type: ignore
+_ct_attempted = False
+
+
+def _ensure_client_transaction() -> None:
+    """Initialize ClientTransaction for x-client-transaction-id header."""
+    global _client_transaction, _ct_attempted
+    if _ct_attempted:
+        return
+    _ct_attempted = True
+
+    try:
+        from x_client_transaction import ClientTransaction
+        from x_client_transaction.utils import generate_headers, get_ondemand_file_url
+        from curl_cffi import requests as cffi_requests
+        import bs4
+    except ImportError:
+        logger.debug("xclienttransaction/curl_cffi/bs4 not available")
+        return
+
+    try:
+        ct_headers = generate_headers()
+        home_resp = cffi_requests.get("https://x.com", headers=ct_headers, impersonate="chrome", timeout=15)
+        home_soup = bs4.BeautifulSoup(home_resp.content, "html.parser")
+        ondemand_url = get_ondemand_file_url(response=home_soup)
+        ondemand_resp = cffi_requests.get(ondemand_url, headers=ct_headers, impersonate="chrome", timeout=10)
+        _client_transaction = ClientTransaction(
+            home_page_response=home_soup,
+            ondemand_file_response=ondemand_resp.text,
+        )
+        logger.debug("ClientTransaction initialized for x-client-transaction-id")
+    except Exception as exc:
+        logger.debug("ClientTransaction init failed: %s", exc)
+
+
+def _get_transaction_id(url: str, method: str = "GET") -> str:
+    """Generate x-client-transaction-id for a request."""
+    _ensure_client_transaction()
+    if not _client_transaction:
+        return ""
+    try:
+        import urllib.parse as _up
+        path = _up.urlparse(url).path
+        return _client_transaction.generate_transaction_id(method=method, path=path)
+    except Exception:
+        return ""
 
 
 def _scan_js_bundles() -> None:
@@ -198,7 +244,7 @@ class TwitterPlatform(Platform):
         return headers
 
     def _graphql_get(self, operation: str, variables: dict, headers: dict) -> dict | None:
-        """Execute a GraphQL GET request. Uses curl_cffi if available (TLS fingerprint)."""
+        """Execute a GraphQL GET request with TLS fingerprint + transaction ID."""
         query_id = _resolve_query_id(operation)
         if not query_id:
             logger.warning("twitter: cannot resolve %s queryId", operation)
@@ -211,25 +257,29 @@ class TwitterPlatform(Platform):
             urllib.parse.quote(json.dumps(features, separators=(",", ":"))),
         )
 
-        # Prefer curl_cffi (TLS fingerprint) over httpx (blocked by Cloudflare)
+        # Add x-client-transaction-id if available
+        tid = _get_transaction_id(url)
+        if tid:
+            headers = {**headers, "X-Client-Transaction-Id": tid}
+
+        # Use curl_cffi for TLS fingerprint
         try:
             from curl_cffi import requests as cffi_requests
             resp = cffi_requests.get(url, headers=headers, impersonate="chrome", timeout=15)
-            logger.debug("twitter %s (curl_cffi): %d, len=%d", operation, resp.status_code, len(resp.content))
+            logger.debug("twitter %s: %d, len=%d", operation, resp.status_code, len(resp.content))
             if resp.status_code == 200 and resp.content:
                 return resp.json()
             if resp.text:
                 logger.debug("twitter %s body: %s", operation, resp.text[:200])
             return None
         except ImportError:
-            pass
+            logger.debug("curl_cffi not available, falling back to httpx")
         except Exception as exc:
             logger.debug("twitter %s curl_cffi error: %s", operation, exc)
 
-        # Fallback to httpx (may get 404 due to TLS fingerprint)
+        # Fallback to httpx
         try:
             resp = httpx.get(url, headers=headers, timeout=15)
-            logger.debug("twitter %s (httpx): %d", operation, resp.status_code)
             if resp.status_code == 200 and resp.content:
                 return resp.json()
             return None
@@ -476,13 +526,22 @@ def _parse_tweet_entry(entry: dict) -> SearchResult | None:
         if result.get("__typename") == "TweetWithVisibilityResults":
             result = result.get("tweet", result)
 
-        core = result.get("core", {}).get("user_results", {}).get("result", {})
-        legacy = result.get("legacy", {})
-        user_legacy = core.get("legacy", {})
+        # User info: try core.screen_name (new) then legacy.screen_name (old)
+        user_result = result.get("core", {}).get("user_results", {}).get("result", {})
+        user_core = user_result.get("core", {})
+        user_legacy = user_result.get("legacy", {})
+        screen_name = (
+            user_core.get("screen_name", "")
+            or user_legacy.get("screen_name", "")
+        )
 
+        # Tweet content: try legacy (old) then rest (new)
+        legacy = result.get("legacy", {})
         text = legacy.get("full_text", "")
-        tweet_id = legacy.get("id_str", result.get("rest_id", ""))
-        screen_name = user_legacy.get("screen_name", "")
+        tweet_id = result.get("rest_id", legacy.get("id_str", ""))
+        likes = legacy.get("favorite_count", 0)
+        replies = legacy.get("reply_count", 0)
+        created = legacy.get("created_at", "")
 
         if not text and not screen_name:
             return None
@@ -491,9 +550,9 @@ def _parse_tweet_entry(entry: dict) -> SearchResult | None:
             title=text[:200],
             url=f"https://x.com/{screen_name}/status/{tweet_id}" if screen_name else "",
             author=f"@{screen_name}" if screen_name else "",
-            likes=legacy.get("favorite_count", 0),
-            comments=legacy.get("reply_count", 0),
-            created_at=legacy.get("created_at", ""),
+            likes=likes,
+            comments=replies,
+            created_at=created,
         )
     except Exception:
         return None
