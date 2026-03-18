@@ -62,6 +62,7 @@ class TestQueryIdResolution:
             qid = _resolve_query_id("NonexistentOperation")
         assert qid == ""
 
+    @pytest.mark.network
     def test_github_resolve_actually_works(self):
         """Integration test: actually fetch from GitHub (network required)."""
         qid = _resolve_query_id("SearchTimeline")

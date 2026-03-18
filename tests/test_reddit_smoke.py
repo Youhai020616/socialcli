@@ -4,6 +4,8 @@ from __future__ import annotations
 import pytest
 from socialcli.platforms.reddit.client import RedditPlatform
 
+pytestmark = pytest.mark.network  # All tests in this file need network
+
 
 @pytest.fixture
 def reddit():

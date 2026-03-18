@@ -63,17 +63,19 @@ class TestDryRun:
 
 
 class TestPlatformSubcommands:
+    @pytest.mark.network
     def test_reddit_search(self, runner):
         result = runner.invoke(cli, ["reddit", "search", "python", "-n", "2", "--json"])
         assert result.exit_code == 0
-        # Should return JSON array
         assert "[" in result.output
 
+    @pytest.mark.network
     def test_reddit_trending(self, runner):
         result = runner.invoke(cli, ["reddit", "trending", "-n", "2", "--json"])
         assert result.exit_code == 0
         assert "rank" in result.output
 
+    @pytest.mark.network
     def test_bilibili_trending(self, runner):
         result = runner.invoke(cli, ["bilibili", "trending", "-n", "2", "--json"])
         assert result.exit_code == 0
@@ -81,7 +83,7 @@ class TestPlatformSubcommands:
 
     def test_douyin_trending_no_crash(self, runner):
         result = runner.invoke(cli, ["douyin", "trending", "--json"])
-        assert result.exit_code == 0  # Should not crash, may return []
+        assert result.exit_code == 0
 
 
 class TestSchedule:
@@ -138,6 +140,7 @@ class TestLogout:
 
 
 class TestTrending:
+    @pytest.mark.network
     def test_aggregated_trending(self, runner):
         result = runner.invoke(cli, ["trending", "-p", "reddit,bilibili", "-n", "2", "--json"])
         assert result.exit_code == 0
@@ -145,6 +148,7 @@ class TestTrending:
         data = json.loads(result.output)
         assert "reddit" in data or "bilibili" in data
 
+    @pytest.mark.network
     def test_trending_single_platform(self, runner):
         result = runner.invoke(cli, ["trending", "-p", "reddit", "-n", "2", "--json"])
         assert result.exit_code == 0

@@ -4,6 +4,8 @@ from __future__ import annotations
 import pytest
 from socialcli.platforms.bilibili.client import BilibiliPlatform
 
+pytestmark = pytest.mark.network  # All tests in this file need network
+
 
 @pytest.fixture
 def bilibili():
