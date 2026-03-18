@@ -163,6 +163,8 @@ class DouyinPlatform(Platform):
     @property
     def cli_group(self):
         """Click group for `social douyin <command>`."""
+        platform = self  # capture for closures
+
         @click.group(name="douyin")
         def douyin_group():
             """🎬 抖音 — search, publish, trending"""
@@ -177,7 +179,7 @@ class DouyinPlatform(Platform):
         def search(query, count, sort, as_json, account):
             """Search Douyin videos."""
             from socialcli.utils.output import print_json, print_table
-            results = _platform.search(query, account, count=count, sort=sort)
+            results = platform.search(query, account, count=count, sort=sort)
             if as_json:
                 print_json([r.__dict__ for r in results])
             else:
@@ -191,7 +193,7 @@ class DouyinPlatform(Platform):
         def trending(count, as_json, account):
             """Get Douyin trending / hot search."""
             from socialcli.utils.output import print_json, print_table
-            items = _platform.trending(account)[:count]
+            items = platform.trending(account)[:count]
             if as_json:
                 print_json([t.__dict__ for t in items])
             else:
@@ -210,7 +212,7 @@ class DouyinPlatform(Platform):
             from socialcli.utils import output
             tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
             c = Content(title=title, text=content, video=video, images=list(image), tags=tag_list)
-            result = _platform.publish(c, account)
+            result = platform.publish(c, account)
             if result.success:
                 output.success(f"Published to Douyin: {result.url}")
             else:

@@ -33,6 +33,8 @@ class ThreadsPlatform(Platform):
 
     @property
     def cli_group(self):
+        platform = self  # capture for closures
+
         @click.group(name="threads")
         def th_group():
             """🧵 Threads — publish"""
@@ -45,7 +47,7 @@ class ThreadsPlatform(Platform):
             """Publish a thread."""
             from socialcli.utils import output
             c = Content(text=text, images=list(image))
-            r = _platform.publish(c, account)
+            r = platform.publish(c, account)
             if r.success: output.success(f"Posted: {r.url}")
             else: output.error(f"Failed: {r.error}")
         return th_group

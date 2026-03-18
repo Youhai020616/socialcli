@@ -58,13 +58,15 @@ class WeiboPlatform(Platform):
         return "SUBP" in names or "SUB" in names or len(cookies) > 5
 
     def _get_headers(self, account: str = "default") -> dict:
-        cookie = cookie_string(self.name, account)
-        return {
+        headers = {
             "User-Agent": DEFAULT_UA,
-            "Cookie": cookie,
             "Referer": "https://weibo.com/",
             "X-Requested-With": "XMLHttpRequest",
         }
+        cookie = cookie_string(self.name, account)
+        if cookie:
+            headers["Cookie"] = cookie
+        return headers
 
     def publish(self, content: Content, account: str = "default") -> PublishResult:
         """Publish a weibo via Playwright."""
@@ -154,6 +156,8 @@ class WeiboPlatform(Platform):
 
     @property
     def cli_group(self):
+        platform = self  # capture for closures
+
         @click.group(name="weibo")
         def weibo_group():
             """🔥 微博 — search, publish, trending"""
@@ -167,7 +171,7 @@ class WeiboPlatform(Platform):
         def search(query, count, as_json, account):
             """Search Weibo posts."""
             from socialcli.utils.output import print_json, print_table
-            results = _platform.search(query, account)[:count]
+            results = platform.search(query, account)[:count]
             if as_json:
                 print_json([r.__dict__ for r in results])
             else:
@@ -180,7 +184,7 @@ class WeiboPlatform(Platform):
         def trending(count, as_json):
             """Get Weibo hot search (微博热搜)."""
             from socialcli.utils.output import print_json, print_table
-            items = _platform.trending()[:count]
+            items = platform.trending()[:count]
             if as_json:
                 print_json([t.__dict__ for t in items])
             else:
@@ -195,7 +199,7 @@ class WeiboPlatform(Platform):
             """Publish a weibo."""
             from socialcli.utils import output
             c = Content(text=text, images=list(image))
-            result = _platform.publish(c, account)
+            result = platform.publish(c, account)
             if result.success:
                 output.success(f"Weibo posted: {result.url}")
             else:

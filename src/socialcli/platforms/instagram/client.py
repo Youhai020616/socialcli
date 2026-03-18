@@ -35,6 +35,8 @@ class InstagramPlatform(Platform):
 
     @property
     def cli_group(self):
+        platform = self  # capture for closures
+
         @click.group(name="instagram")
         def ig_group():
             """📷 Instagram — publish"""
@@ -48,7 +50,7 @@ class InstagramPlatform(Platform):
             """Publish to Instagram."""
             from socialcli.utils import output
             c = Content(text=caption, images=list(image), video=video)
-            r = _platform.publish(c, account)
+            r = platform.publish(c, account)
             if r.success: output.success(f"Posted: {r.url}")
             else: output.error(f"Failed: {r.error}")
         return ig_group

@@ -49,12 +49,14 @@ class KuaishouPlatform(Platform):
         return len(cookies) > 3
 
     def _get_headers(self, account: str = "default") -> dict:
-        cookie = cookie_string(self.name, account)
-        return {
+        headers = {
             "User-Agent": DEFAULT_UA,
-            "Cookie": cookie,
             "Referer": "https://cp.kuaishou.com/",
         }
+        cookie = cookie_string(self.name, account)
+        if cookie:
+            headers["Cookie"] = cookie
+        return headers
 
     def publish(self, content: Content, account: str = "default") -> PublishResult:
         if not content.video:
@@ -110,6 +112,8 @@ class KuaishouPlatform(Platform):
 
     @property
     def cli_group(self):
+        platform = self  # capture for closures
+
         @click.group(name="kuaishou")
         def ks_group():
             """⚡ 快手 — search, publish"""
@@ -123,7 +127,7 @@ class KuaishouPlatform(Platform):
         def search(query, count, as_json, account):
             """Search Kuaishou videos."""
             from socialcli.utils.output import print_json, print_table
-            results = _platform.search(query, account, count=count)
+            results = platform.search(query, account, count=count)
             if as_json:
                 print_json([r.__dict__ for r in results])
             else:
@@ -139,7 +143,7 @@ class KuaishouPlatform(Platform):
             """Publish video to Kuaishou."""
             from socialcli.utils import output
             c = Content(title=title, text=content, video=video)
-            result = _platform.publish(c, account)
+            result = platform.publish(c, account)
             if result.success:
                 output.success(f"Published: {result.url}")
             else:

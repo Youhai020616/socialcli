@@ -97,6 +97,8 @@ class YoutubePlatform(Platform):
 
     @property
     def cli_group(self):
+        platform = self  # capture for closures
+
         @click.group(name="youtube")
         def yt_group():
             """▶️ YouTube — search, publish, trending"""
@@ -109,7 +111,7 @@ class YoutubePlatform(Platform):
         def search(query, count, as_json, account):
             """Search YouTube videos."""
             from socialcli.utils.output import print_json, print_table
-            results = _platform.search(query, account, count=count)
+            results = platform.search(query, account, count=count)
             if as_json: print_json([r.__dict__ for r in results])
             else:
                 rows = [[r.title[:50], r.author, r.snippet[:20], r.url[:50]] for r in results]
@@ -124,7 +126,7 @@ class YoutubePlatform(Platform):
             """Upload video to YouTube."""
             from socialcli.utils import output
             c = Content(title=title, text=content, video=video, tags=[t.strip() for t in tags.split(",") if t.strip()] if tags else [])
-            result = _platform.publish(c, account)
+            result = platform.publish(c, account)
             if result.success: output.success(f"Uploaded: {result.url}")
             else: output.error(f"Failed: {result.error}")
         return yt_group

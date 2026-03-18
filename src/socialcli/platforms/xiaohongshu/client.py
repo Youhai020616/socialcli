@@ -128,6 +128,8 @@ class XiaohongshuPlatform(Platform):
     # --- CLI subgroup ---
     @property
     def cli_group(self):
+        platform = self  # capture for closures
+
         @click.group(name="xhs")
         def xhs_group():
             """📕 小红书 — search, publish"""
@@ -142,7 +144,7 @@ class XiaohongshuPlatform(Platform):
         def search(query, count, sort, as_json, account):
             """Search Xiaohongshu notes."""
             from socialcli.utils.output import print_json, print_table
-            results = _platform.search(query, account, count=count, sort=sort)
+            results = platform.search(query, account, count=count, sort=sort)
             if as_json:
                 print_json([r.__dict__ for r in results])
             else:
@@ -161,7 +163,7 @@ class XiaohongshuPlatform(Platform):
             from socialcli.utils import output
             tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
             c = Content(title=title, text=content, images=list(image), video=video, tags=tag_list)
-            result = _platform.publish(c, account)
+            result = platform.publish(c, account)
             if result.success:
                 output.success(f"Published to 小红书: {result.url}")
             else:

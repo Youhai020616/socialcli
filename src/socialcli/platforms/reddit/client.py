@@ -26,11 +26,8 @@ from socialcli.auth.browser_login import browser_login
 BASE_URL = "https://www.reddit.com"
 OAUTH_URL = "https://oauth.reddit.com"
 
-DEFAULT_UA = (
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/133.0.0.0 Safari/537.36"
-)
+# Reddit requires a descriptive UA; generic browser UAs get 403 on .json endpoints
+DEFAULT_UA = "socialcli/0.1.0 (Python; social media CLI; +https://github.com/socialcli)"
 
 
 class RedditPlatform(Platform):
@@ -59,12 +56,14 @@ class RedditPlatform(Platform):
         return "reddit_session" in names or "token_v2" in names or len(cookies) > 5
 
     def _get_headers(self, account: str = "default") -> dict:
-        cookie = cookie_string(self.name, account)
-        return {
+        headers = {
             "User-Agent": DEFAULT_UA,
-            "Cookie": cookie,
             "Accept": "application/json",
         }
+        cookie = cookie_string(self.name, account)
+        if cookie:
+            headers["Cookie"] = cookie
+        return headers
 
     def _modhash(self, account: str = "default") -> str:
         """Get modhash for write operations (CSRF token)."""
@@ -253,6 +252,8 @@ class RedditPlatform(Platform):
     # --- CLI subgroup ---
     @property
     def cli_group(self):
+        platform = self  # capture for closures
+
         @click.group(name="reddit")
         def reddit_group():
             """📖 Reddit — search, publish, trending, interact"""
@@ -268,7 +269,7 @@ class RedditPlatform(Platform):
         def search(query, subreddit, sort, count, as_json, account):
             """Search Reddit posts."""
             from socialcli.utils.output import print_json, print_table
-            results = _platform.search(query, account, subreddit=subreddit, sort=sort, count=count)
+            results = platform.search(query, account, subreddit=subreddit, sort=sort, count=count)
             if as_json:
                 print_json([r.__dict__ for r in results])
             else:
@@ -282,7 +283,7 @@ class RedditPlatform(Platform):
         def trending(count, as_json, account):
             """Get Reddit popular posts."""
             from socialcli.utils.output import print_json, print_table
-            items = _platform.trending(account)[:count]
+            items = platform.trending(account)[:count]
             if as_json:
                 print_json([t.__dict__ for t in items])
             else:
@@ -299,7 +300,7 @@ class RedditPlatform(Platform):
             """Submit a post to a subreddit."""
             from socialcli.utils import output
             c = Content(title=title, text=content, link=link, extras={"subreddit": subreddit})
-            result = _platform.publish(c, account)
+            result = platform.publish(c, account)
             if result.success:
                 output.success(f"Posted to r/{subreddit}: {result.url}")
             else:
@@ -311,7 +312,7 @@ class RedditPlatform(Platform):
         def upvote(post_id, account):
             """Upvote a post."""
             from socialcli.utils import output
-            if _platform.like(post_id, account):
+            if platform.like(post_id, account):
                 output.success("Upvoted")
             else:
                 output.error("Upvote failed")

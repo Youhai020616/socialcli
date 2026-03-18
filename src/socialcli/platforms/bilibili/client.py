@@ -56,13 +56,15 @@ class BilibiliPlatform(Platform):
         return "SESSDATA" in names or "bili_jct" in names or len(cookies) > 5
 
     def _get_headers(self, account: str = "default") -> dict:
-        cookie = cookie_string(self.name, account)
-        return {
+        headers = {
             "User-Agent": DEFAULT_UA,
-            "Cookie": cookie,
             "Referer": "https://www.bilibili.com/",
             "Origin": "https://www.bilibili.com",
         }
+        cookie = cookie_string(self.name, account)
+        if cookie:
+            headers["Cookie"] = cookie
+        return headers
 
     def publish(self, content: Content, account: str = "default") -> PublishResult:
         """Publish video to Bilibili via Playwright."""
@@ -120,13 +122,15 @@ class BilibiliPlatform(Platform):
             return []
 
     def trending(self, account: str = "default", **kwargs) -> List[TrendingItem]:
-        """Get Bilibili hot ranking."""
+        """Get Bilibili popular videos (热门)."""
         headers = self._get_headers(account)
+        count = kwargs.get("count", 30)
 
         try:
+            # Use /popular endpoint (no wbi auth needed) instead of /ranking/v2
             resp = httpx.get(
-                HOT_URL,
-                params={"rid": 0, "type": "all"},
+                "https://api.bilibili.com/x/web-interface/popular",
+                params={"ps": min(count, 50), "pn": 1},
                 headers=headers,
                 timeout=10,
             )
@@ -134,7 +138,9 @@ class BilibiliPlatform(Platform):
             items = []
             if resp.status_code == 200:
                 data = resp.json()
-                for i, item in enumerate(data.get("data", {}).get("list", [])[:30]):
+                if data.get("code") != 0:
+                    return items
+                for i, item in enumerate(data.get("data", {}).get("list", [])[:count]):
                     stat = item.get("stat", {})
                     items.append(TrendingItem(
                         rank=i + 1,
@@ -175,6 +181,8 @@ class BilibiliPlatform(Platform):
 
     @property
     def cli_group(self):
+        platform = self  # capture for closures
+
         @click.group(name="bilibili")
         def bili_group():
             """📺 B站 — search, publish, trending"""
@@ -188,7 +196,7 @@ class BilibiliPlatform(Platform):
         def search(query, count, as_json, account):
             """Search Bilibili videos."""
             from socialcli.utils.output import print_json, print_table
-            results = _platform.search(query, account, count=count)
+            results = platform.search(query, account, count=count)
             if as_json:
                 print_json([r.__dict__ for r in results])
             else:
@@ -202,7 +210,7 @@ class BilibiliPlatform(Platform):
         def trending(count, as_json, account):
             """Get Bilibili hot ranking."""
             from socialcli.utils.output import print_json, print_table
-            items = _platform.trending(account)[:count]
+            items = platform.trending(account)[:count]
             if as_json:
                 print_json([t.__dict__ for t in items])
             else:
@@ -220,7 +228,7 @@ class BilibiliPlatform(Platform):
             from socialcli.utils import output
             tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
             c = Content(title=title, text=content, video=video, tags=tag_list)
-            result = _platform.publish(c, account)
+            result = platform.publish(c, account)
             if result.success:
                 output.success(f"Published to B站: {result.url}")
             else:

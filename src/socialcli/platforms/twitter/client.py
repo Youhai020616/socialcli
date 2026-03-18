@@ -72,17 +72,20 @@ class TwitterPlatform(Platform):
         cookie_str = "; ".join(f"{c['name']}={c['value']}" for c in cookies if "name" in c)
         ct0 = next((c["value"] for c in cookies if c.get("name") == "ct0"), "")
 
-        return {
+        headers = {
             "User-Agent": DEFAULT_UA,
-            "Cookie": cookie_str,
             "Authorization": f"Bearer {BEARER_TOKEN}",
-            "X-Csrf-Token": ct0,
             "X-Twitter-Auth-Type": "OAuth2Session",
             "X-Twitter-Active-User": "yes",
             "X-Twitter-Client-Language": "en",
             "Referer": "https://x.com/",
             "Origin": "https://x.com",
         }
+        if cookie_str:
+            headers["Cookie"] = cookie_str
+        if ct0:
+            headers["X-Csrf-Token"] = ct0
+        return headers
 
     def publish(self, content: Content, account: str = "default") -> PublishResult:
         """Publish tweet via reverse-engineered GraphQL API."""
@@ -267,6 +270,8 @@ class TwitterPlatform(Platform):
     # --- CLI subgroup ---
     @property
     def cli_group(self):
+        platform = self  # capture for closures
+
         @click.group(name="twitter")
         def twitter_group():
             """🐦 Twitter/X — search, publish, trending"""
@@ -280,7 +285,7 @@ class TwitterPlatform(Platform):
         def search(query, count, as_json, account):
             """Search Twitter/X."""
             from socialcli.utils.output import print_json, print_table
-            results = _platform.search(query, account, count=count)
+            results = platform.search(query, account, count=count)
             if as_json:
                 print_json([r.__dict__ for r in results])
             else:
@@ -294,7 +299,7 @@ class TwitterPlatform(Platform):
         def trending(count, as_json, account):
             """Get Twitter/X trending topics."""
             from socialcli.utils.output import print_json, print_table
-            items = _platform.trending(account)[:count]
+            items = platform.trending(account)[:count]
             if as_json:
                 print_json([t.__dict__ for t in items])
             else:
@@ -309,7 +314,7 @@ class TwitterPlatform(Platform):
             """Publish a tweet."""
             from socialcli.utils import output
             c = Content(text=text, images=list(image))
-            result = _platform.publish(c, account)
+            result = platform.publish(c, account)
             if result.success:
                 output.success(f"Tweet posted: {result.url}")
             else:

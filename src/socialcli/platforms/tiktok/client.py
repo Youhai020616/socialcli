@@ -52,12 +52,14 @@ class TiktokPlatform(Platform):
         return "sessionid" in names or "sid_tt" in names or len(cookies) > 5
 
     def _get_headers(self, account: str = "default") -> dict:
-        cookie = cookie_string(self.name, account)
-        return {
+        headers = {
             "User-Agent": DEFAULT_UA,
-            "Cookie": cookie,
             "Referer": "https://www.tiktok.com/",
         }
+        cookie = cookie_string(self.name, account)
+        if cookie:
+            headers["Cookie"] = cookie
+        return headers
 
     def publish(self, content: Content, account: str = "default") -> PublishResult:
         """Publish video to TikTok via Playwright."""
@@ -153,6 +155,8 @@ class TiktokPlatform(Platform):
 
     @property
     def cli_group(self):
+        platform = self  # capture for closures
+
         @click.group(name="tiktok")
         def tiktok_group():
             """🎵 TikTok — search, publish, trending"""
@@ -166,7 +170,7 @@ class TiktokPlatform(Platform):
         def search(query, count, as_json, account):
             """Search TikTok videos."""
             from socialcli.utils.output import print_json, print_table
-            results = _platform.search(query, account, count=count)
+            results = platform.search(query, account, count=count)
             if as_json:
                 print_json([r.__dict__ for r in results])
             else:
@@ -184,7 +188,7 @@ class TiktokPlatform(Platform):
             from socialcli.utils import output
             tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
             c = Content(title=title, text=content, video=video, tags=tag_list)
-            result = _platform.publish(c, account)
+            result = platform.publish(c, account)
             if result.success:
                 output.success(f"Published to TikTok: {result.url}")
             else:

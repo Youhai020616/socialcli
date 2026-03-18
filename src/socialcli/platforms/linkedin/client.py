@@ -56,13 +56,16 @@ class LinkedinPlatform(Platform):
         csrf = next((c["value"] for c in cookies if c.get("name") == "JSESSIONID"), "")
         csrf = csrf.strip('"')
 
-        return {
+        headers = {
             "User-Agent": DEFAULT_UA,
-            "Cookie": cookie_str,
-            "Csrf-Token": csrf,
             "X-Restli-Protocol-Version": "2.0.0",
             "Accept": "application/vnd.linkedin.normalized+json+2.1",
         }
+        if cookie_str:
+            headers["Cookie"] = cookie_str
+        if csrf:
+            headers["Csrf-Token"] = csrf
+        return headers
 
     def publish(self, content: Content, account: str = "default") -> PublishResult:
         """Publish a post to LinkedIn via Playwright."""
@@ -131,6 +134,8 @@ class LinkedinPlatform(Platform):
 
     @property
     def cli_group(self):
+        platform = self  # capture for closures
+
         @click.group(name="linkedin")
         def linkedin_group():
             """💼 LinkedIn — search, publish"""
@@ -144,7 +149,7 @@ class LinkedinPlatform(Platform):
         def search(query, count, as_json, account):
             """Search LinkedIn posts."""
             from socialcli.utils.output import print_json, print_table
-            results = _platform.search(query, account, count=count)
+            results = platform.search(query, account, count=count)
             if as_json:
                 print_json([r.__dict__ for r in results])
             else:
@@ -159,7 +164,7 @@ class LinkedinPlatform(Platform):
             """Publish a LinkedIn post."""
             from socialcli.utils import output
             c = Content(text=text, images=list(image))
-            result = _platform.publish(c, account)
+            result = platform.publish(c, account)
             if result.success:
                 output.success(f"Posted to LinkedIn: {result.url}")
             else:
