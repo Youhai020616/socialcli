@@ -104,17 +104,26 @@ class TwitterPlatform(Platform):
     display_name = "Twitter/X"
     icon = "🐦"
     base_referer = "https://x.com/"
+    cookie_domain = ".x.com"
+    required_cookies = ["auth_token", "ct0"]
 
     LOGIN_URL = "https://x.com/i/flow/login"
     SUCCESS_URL = "x.com/home"
 
     def login(self, account: str = "default", **kwargs) -> bool:
+        from rich.console import Console
+        console = Console(stderr=True)
+
+        if self.login_with_browser_cookies(account):
+            cookies = load_cookies(self.name, account) or []
+            console.print(f"[green]✔ Extracted {len(cookies)} Twitter cookies from local browser[/green]")
+            return True
+
+        console.print("[dim]Browser cookie extraction failed, opening Playwright login...[/dim]")
         return browser_login(
-            platform=self.name,
-            login_url=self.LOGIN_URL,
+            platform=self.name, login_url=self.LOGIN_URL,
             success_url_pattern=self.SUCCESS_URL,
-            account=account,
-            headless=kwargs.get("headless", False),
+            account=account, headless=kwargs.get("headless", False),
         )
 
     def check_login(self, account: str = "default") -> bool:

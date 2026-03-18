@@ -39,17 +39,26 @@ class BilibiliPlatform(Platform):
     display_name = "B站"
     icon = "📺"
     base_referer = "https://www.bilibili.com/"
+    cookie_domain = ".bilibili.com"
+    required_cookies = ["SESSDATA", "bili_jct"]
 
     LOGIN_URL = "https://passport.bilibili.com/login"
     SUCCESS_URL = "bilibili.com"
 
     def login(self, account: str = "default", **kwargs) -> bool:
+        from rich.console import Console
+        console = Console(stderr=True)
+
+        if self.login_with_browser_cookies(account):
+            cookies = load_cookies(self.name, account) or []
+            console.print(f"[green]✔ Extracted {len(cookies)} B站 cookies from local browser[/green]")
+            return True
+
+        console.print("[dim]Browser cookie extraction failed, opening Playwright login...[/dim]")
         return browser_login(
-            platform=self.name,
-            login_url=self.LOGIN_URL,
+            platform=self.name, login_url=self.LOGIN_URL,
             success_url_pattern=self.SUCCESS_URL,
-            account=account,
-            headless=kwargs.get("headless", False),
+            account=account, headless=kwargs.get("headless", False),
         )
 
     def check_login(self, account: str = "default") -> bool:
@@ -57,7 +66,7 @@ class BilibiliPlatform(Platform):
         if not cookies:
             return False
         names = {c.get("name") for c in cookies}
-        return "SESSDATA" in names or "bili_jct" in names or len(cookies) > 5
+        return "SESSDATA" in names
 
     def _get_headers(self, account: str = "default") -> dict:
         headers = super()._get_headers(account)

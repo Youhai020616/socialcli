@@ -25,25 +25,34 @@ class XiaohongshuPlatform(Platform):
     name = "xhs"
     display_name = "小红书"
     icon = "📕"
+    cookie_domain = ".xiaohongshu.com"
+    required_cookies = ["a1", "web_session"]
 
     LOGIN_URL = "https://creator.xiaohongshu.com/"
     SUCCESS_URL = "creator.xiaohongshu.com/home"
 
     def login(self, account: str = "default", **kwargs) -> bool:
-        headless = kwargs.get("headless", False)
+        from rich.console import Console
+        console = Console(stderr=True)
+
+        if self.login_with_browser_cookies(account):
+            cookies = load_cookies(self.name, account) or []
+            console.print(f"[green]✔ Extracted {len(cookies)} 小红书 cookies from local browser[/green]")
+            return True
+
+        console.print("[dim]Browser cookie extraction failed, opening Playwright login...[/dim]")
         return browser_login(
-            platform=self.name,
-            login_url=self.LOGIN_URL,
+            platform=self.name, login_url=self.LOGIN_URL,
             success_url_pattern=self.SUCCESS_URL,
-            account=account,
-            headless=headless,
+            account=account, headless=kwargs.get("headless", False),
         )
 
     def check_login(self, account: str = "default") -> bool:
         cookies = load_cookies(self.name, account)
         if not cookies:
             return False
-        return len(cookies) > 3
+        names = {c.get("name") for c in cookies}
+        return "a1" in names and "web_session" in names
 
     def publish(self, content: Content, account: str = "default") -> PublishResult:
         """Publish to Xiaohongshu via browser automation."""

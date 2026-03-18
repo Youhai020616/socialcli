@@ -97,7 +97,61 @@ class Platform(ABC):
     default_ua: str = DEFAULT_UA
     base_referer: str = ""
 
+    # Cookie domain for browser extraction (e.g. ".bilibili.com")
+    cookie_domain: str = ""
+    # Required cookie names to consider login valid
+    required_cookies: list[str] = []
+
     # --- Common helpers ---
+
+    def _extract_browser_cookies(self) -> dict[str, str] | None:
+        """Extract cookies from local browsers (Chrome/Firefox/Edge/Brave).
+
+        Returns dict of cookie name→value if required_cookies are found,
+        otherwise None. Subclasses can override required_cookies.
+        """
+        if not self.cookie_domain:
+            return None
+        try:
+            import browser_cookie3
+        except ImportError:
+            return None
+
+        import logging
+        logger = logging.getLogger(__name__)
+
+        for fn in [browser_cookie3.chrome, browser_cookie3.firefox,
+                    browser_cookie3.edge, browser_cookie3.brave]:
+            try:
+                jar = fn(domain_name=self.cookie_domain)
+                cookies = {c.name: c.value for c in jar}
+                if self.required_cookies:
+                    if all(k in cookies for k in self.required_cookies):
+                        logger.debug("Extracted %d cookies from %s for %s",
+                                     len(cookies), fn.__name__, self.name)
+                        return cookies
+                elif len(cookies) > 3:
+                    return cookies
+            except Exception:
+                continue
+        return None
+
+    def login_with_browser_cookies(self, account: str = "default") -> bool:
+        """Try to login by extracting cookies from local browser.
+
+        Returns True if successful. Subclass login() should call this first,
+        then fall back to Playwright if it returns False.
+        """
+        from socialcli.auth.cookie_store import save_cookies
+        cookies = self._extract_browser_cookies()
+        if not cookies:
+            return False
+        cookie_list = [
+            {"name": k, "value": v, "domain": self.cookie_domain, "path": "/"}
+            for k, v in cookies.items()
+        ]
+        save_cookies(self.name, cookie_list, account)
+        return True
 
     def _get_headers(self, account: str = "default") -> dict:
         """Build HTTP headers with UA, optional cookie, optional referer.

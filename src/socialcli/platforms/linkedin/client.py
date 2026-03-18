@@ -31,17 +31,26 @@ class LinkedinPlatform(Platform):
     display_name = "LinkedIn"
     icon = "💼"
     base_referer = "https://www.linkedin.com/"
+    cookie_domain = ".linkedin.com"
+    required_cookies = ["li_at", "JSESSIONID"]
 
     LOGIN_URL = "https://www.linkedin.com/login"
     SUCCESS_URL = "linkedin.com/feed"
 
     def login(self, account: str = "default", **kwargs) -> bool:
+        from rich.console import Console
+        console = Console(stderr=True)
+
+        if self.login_with_browser_cookies(account):
+            cookies = load_cookies(self.name, account) or []
+            console.print(f"[green]✔ Extracted {len(cookies)} LinkedIn cookies from local browser[/green]")
+            return True
+
+        console.print("[dim]Browser cookie extraction failed, opening Playwright login...[/dim]")
         return browser_login(
-            platform=self.name,
-            login_url=self.LOGIN_URL,
+            platform=self.name, login_url=self.LOGIN_URL,
             success_url_pattern=self.SUCCESS_URL,
-            account=account,
-            headless=kwargs.get("headless", False),
+            account=account, headless=kwargs.get("headless", False),
         )
 
     def check_login(self, account: str = "default") -> bool:
@@ -49,7 +58,7 @@ class LinkedinPlatform(Platform):
         if not cookies:
             return False
         names = {c.get("name") for c in cookies}
-        return "li_at" in names or "JSESSIONID" in names or len(cookies) > 5
+        return "li_at" in names
 
     def _get_headers(self, account: str = "default") -> dict:
         cookies = load_cookies(self.name, account) or []

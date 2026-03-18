@@ -35,60 +35,28 @@ class RedditPlatform(Platform):
     name = "reddit"
     display_name = "Reddit"
     icon = "📖"
-    # Reddit requires a descriptive UA; generic browser UAs get 403 on .json endpoints
     default_ua = "socialcli/0.1.0 (Python; social media CLI; +https://github.com/socialcli)"
+    cookie_domain = ".reddit.com"
+    required_cookies = ["reddit_session"]
 
     LOGIN_URL = "https://www.reddit.com/login/"
     SUCCESS_URL = "reddit.com"
 
     def login(self, account: str = "default", **kwargs) -> bool:
-        """Login to Reddit.
-
-        Strategy: extract cookies from local browser (Chrome/Firefox/Edge)
-        first. Falls back to Playwright browser login if extraction fails.
-        """
-        from socialcli.auth.cookie_store import save_cookies
         from rich.console import Console
         console = Console(stderr=True)
 
-        # Strategy 1: Extract from local browser (fast, gets reddit_session)
-        cred = self._extract_browser_cookies()
-        if cred:
-            cookie_list = [{"name": k, "value": v, "domain": ".reddit.com", "path": "/"} for k, v in cred.items()]
-            save_cookies(self.name, cookie_list, account)
-            console.print(f"[green]✔ Extracted {len(cookie_list)} cookies from local browser[/green]")
+        if self.login_with_browser_cookies(account):
+            cookies = load_cookies(self.name, account) or []
+            console.print(f"[green]✔ Extracted {len(cookies)} cookies from local browser[/green]")
             return True
 
-        # Strategy 2: Playwright (fallback)
         console.print("[dim]Browser cookie extraction failed, opening Playwright login...[/dim]")
-        headless = kwargs.get("headless", False)
         return browser_login(
-            platform=self.name,
-            login_url=self.LOGIN_URL,
+            platform=self.name, login_url=self.LOGIN_URL,
             success_url_pattern=self.SUCCESS_URL,
-            account=account,
-            headless=headless,
+            account=account, headless=kwargs.get("headless", False),
         )
-
-    @staticmethod
-    def _extract_browser_cookies() -> dict[str, str] | None:
-        """Extract Reddit cookies from installed browsers."""
-        try:
-            import browser_cookie3
-        except ImportError:
-            logger.debug("browser-cookie3 not installed")
-            return None
-
-        for fn in [browser_cookie3.chrome, browser_cookie3.firefox, browser_cookie3.edge, browser_cookie3.brave]:
-            try:
-                jar = fn(domain_name=".reddit.com")
-                cookies = {c.name: c.value for c in jar}
-                if "reddit_session" in cookies:
-                    logger.debug("Extracted %d cookies via %s", len(cookies), fn.__name__)
-                    return cookies
-            except Exception:
-                continue
-        return None
 
     def check_login(self, account: str = "default") -> bool:
         cookies = load_cookies(self.name, account)
