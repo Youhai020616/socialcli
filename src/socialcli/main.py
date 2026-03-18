@@ -79,18 +79,22 @@ def cli(ctx, verbose):
 
 # Register built-in commands
 from socialcli.commands.login import login
+from socialcli.commands.logout import logout
 from socialcli.commands.accounts import accounts
 from socialcli.commands.publish import publish
 from socialcli.commands.schedule import schedule
+from socialcli.commands.config import config
 from socialcli.commands.ai import ai
 from socialcli.commands.batch import batch
 from socialcli.commands.monitor import monitor
 from socialcli.commands.trending import trending
 
 cli.add_command(login)
+cli.add_command(logout)
 cli.add_command(accounts)
 cli.add_command(publish)
 cli.add_command(schedule)
+cli.add_command(config)
 cli.add_command(ai)
 cli.add_command(batch)
 cli.add_command(monitor)

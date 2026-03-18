@@ -382,6 +382,8 @@ class TwitterPlatform(Platform):
     def publish(self, content: Content, account: str = "default") -> PublishResult:
         """Publish tweet via GraphQL CreateTweet mutation."""
         headers = self._get_headers(account)
+        if "Cookie" not in headers:
+            return PublishResult(success=False, platform=self.name, error="Not logged in. Run: social login twitter")
 
         tweet_text = content.text
         if content.title and content.title not in tweet_text:
@@ -391,6 +393,8 @@ class TwitterPlatform(Platform):
         if not query_id:
             return PublishResult(success=False, platform=self.name, error="Cannot resolve CreateTweet queryId")
 
+        url = f"{GRAPHQL_URL}/{query_id}/CreateTweet"
+
         variables = {
             "tweet_text": tweet_text,
             "dark_request": False,
@@ -398,23 +402,33 @@ class TwitterPlatform(Platform):
             "semantic_annotation_ids": [],
         }
 
-        payload = {
-            "variables": json.dumps(variables),
-            "features": json.dumps(
-                {k: v for k, v in _FEATURES.items() if v is not False},
-            ),
+        payload = json.dumps({
+            "variables": variables,
+            "features": {k: v for k, v in _FEATURES.items() if v is not False},
             "queryId": query_id,
+        })
+
+        # Add transaction ID and POST-specific headers
+        tid = _get_transaction_id(url, method="POST")
+        post_headers = {
+            **headers,
+            "Content-Type": "application/json",
+            "Referer": "https://x.com/compose/post",
         }
+        if tid:
+            post_headers["X-Client-Transaction-Id"] = tid
 
         try:
-            resp = httpx.post(
-                f"{GRAPHQL_URL}/{query_id}/CreateTweet",
-                headers=headers,
-                data=payload,
-                timeout=30,
-            )
+            # Prefer curl_cffi for TLS fingerprint
+            try:
+                from curl_cffi import requests as cffi_requests
+                resp = cffi_requests.post(url, headers=post_headers, data=payload, impersonate="chrome", timeout=30)
+            except ImportError:
+                resp = httpx.post(url, headers=post_headers, content=payload, timeout=30)
 
-            if resp.status_code == 200:
+            logger.debug("twitter publish: %d %s", resp.status_code, resp.text[:200] if resp.text else "")
+
+            if resp.status_code == 200 and resp.text:
                 data = resp.json()
                 tweet_result = (
                     data.get("data", {})
@@ -432,7 +446,7 @@ class TwitterPlatform(Platform):
             else:
                 return PublishResult(
                     success=False, platform=self.name,
-                    error=f"HTTP {resp.status_code}: {resp.text[:200]}",
+                    error=f"HTTP {resp.status_code}: {resp.text[:200] if resp.text else 'empty'}",
                 )
         except Exception as e:
             return PublishResult(success=False, platform=self.name, error=str(e))

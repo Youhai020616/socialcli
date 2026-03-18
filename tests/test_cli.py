@@ -101,3 +101,37 @@ class TestSchedule:
     def test_schedule_run(self, runner):
         result = runner.invoke(cli, ["schedule", "run"])
         assert result.exit_code == 0
+
+
+class TestConfig:
+    def test_config_show_empty(self, runner):
+        result = runner.invoke(cli, ["config", "show"])
+        assert result.exit_code == 0
+
+    def test_config_set_and_get(self, runner, tmp_path, monkeypatch):
+        from socialcli.commands import config as config_mod
+        monkeypatch.setattr(config_mod, "CONFIG_FILE", tmp_path / "config.json")
+
+        result = runner.invoke(cli, ["config", "set", "test_key", "test_value"])
+        assert result.exit_code == 0
+        assert "test_key" in result.output
+
+        result = runner.invoke(cli, ["config", "get", "test_key"])
+        assert result.exit_code == 0
+        assert "test_value" in result.output
+
+    def test_config_unset(self, runner, tmp_path, monkeypatch):
+        from socialcli.commands import config as config_mod
+        monkeypatch.setattr(config_mod, "CONFIG_FILE", tmp_path / "config.json")
+
+        runner.invoke(cli, ["config", "set", "k", "v"])
+        result = runner.invoke(cli, ["config", "unset", "k"])
+        assert result.exit_code == 0
+        assert "Removed" in result.output
+
+
+class TestLogout:
+    def test_logout_no_session(self, runner):
+        result = runner.invoke(cli, ["logout", "nonexistent_platform"])
+        assert result.exit_code == 0
+        assert "No saved session" in result.output
