@@ -10,5 +10,6 @@ venv/
 .env
 .DS_Store
 github/
+plan/
 socialcli-plan.md
 *.log
