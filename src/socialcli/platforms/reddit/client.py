@@ -63,19 +63,20 @@ class RedditPlatform(Platform):
         headers["Accept"] = "application/json"
         return headers
 
-    def _modhash(self, account: str = "default") -> str:
-        """Get modhash for write operations (CSRF token)."""
-        headers = self._get_headers(account)
-        try:
-            resp = httpx.get(f"{BASE_URL}/api/me.json", headers=headers, timeout=10)
-            data = resp.json()
-            return data.get("data", {}).get("modhash", "")
-        except Exception as exc:
-            logger.debug("%s modhash: %s", self.name, exc)
-            return ""
+    def _get_oauth_headers(self, account: str = "default") -> dict:
+        """Build OAuth headers using token_v2 as bearer token."""
+        cookies = load_cookies(self.name, account) or []
+        token = next((c["value"] for c in cookies if c.get("name") == "token_v2"), "")
+        headers = {
+            "User-Agent": self.default_ua,
+            "Accept": "application/json",
+        }
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        return headers
 
     def publish(self, content: Content, account: str = "default") -> PublishResult:
-        """Submit a post to a subreddit."""
+        """Submit a post to a subreddit via OAuth API."""
         subreddit = content.extras.get("subreddit", "")
         if not subreddit:
             return PublishResult(
@@ -86,8 +87,13 @@ class RedditPlatform(Platform):
         # Remove r/ prefix if present
         subreddit = subreddit.lstrip("r/").strip("/")
 
-        headers = self._get_headers(account)
-        modhash = self._modhash(account)
+        # Use OAuth API with bearer token (works with token_v2)
+        headers = self._get_oauth_headers(account)
+        if "Authorization" not in headers:
+            return PublishResult(
+                success=False, platform=self.name,
+                error="No auth token. Run: social login reddit",
+            )
 
         # Determine post type
         if content.link:
@@ -102,7 +108,6 @@ class RedditPlatform(Platform):
             "kind": kind,
             "sr": subreddit,
             "title": content.title or content.text[:300],
-            "uh": modhash,
             "resubmit": "true",
         }
 
@@ -111,7 +116,7 @@ class RedditPlatform(Platform):
         elif kind == "link":
             data["url"] = content.link
         elif kind == "image" and content.images:
-            data["url"] = content.images[0]  # Reddit image posts use URL
+            data["url"] = content.images[0]
             data["kind"] = "link"
 
         # Random delay before posting (anti-detection)
@@ -119,12 +124,13 @@ class RedditPlatform(Platform):
 
         try:
             resp = httpx.post(
-                f"{BASE_URL}/api/submit",
+                f"{OAUTH_URL}/api/submit",
                 headers=headers,
                 data=data,
                 timeout=30,
                 follow_redirects=True,
             )
+            logger.debug("reddit publish: %d %s", resp.status_code, resp.text[:200])
 
             result = resp.json()
             json_data = result.get("json", {})
@@ -210,14 +216,13 @@ class RedditPlatform(Platform):
             return []
 
     def like(self, target_id: str, account: str = "default", **kwargs) -> bool:
-        """Upvote a post."""
-        headers = self._get_headers(account)
-        modhash = self._modhash(account)
+        """Upvote a post via OAuth API."""
+        headers = self._get_oauth_headers(account)
         try:
             resp = httpx.post(
-                f"{BASE_URL}/api/vote",
+                f"{OAUTH_URL}/api/vote",
                 headers=headers,
-                data={"id": target_id, "dir": "1", "uh": modhash},
+                data={"id": target_id, "dir": "1"},
                 timeout=10,
             )
             return resp.status_code == 200
@@ -226,14 +231,13 @@ class RedditPlatform(Platform):
             return False
 
     def comment(self, target_id: str, text: str, account: str = "default", **kwargs) -> bool:
-        """Comment on a post."""
-        headers = self._get_headers(account)
-        modhash = self._modhash(account)
+        """Comment on a post via OAuth API."""
+        headers = self._get_oauth_headers(account)
         try:
             resp = httpx.post(
-                f"{BASE_URL}/api/comment",
+                f"{OAUTH_URL}/api/comment",
                 headers=headers,
-                data={"thing_id": target_id, "text": text, "uh": modhash, "api_type": "json"},
+                data={"thing_id": target_id, "text": text, "api_type": "json"},
                 timeout=10,
             )
             return resp.status_code == 200

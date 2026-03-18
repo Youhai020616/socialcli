@@ -81,8 +81,20 @@ async def _browser_login_async(
                 console.print("[yellow]Press Enter after you've logged in...[/yellow]")
                 await asyncio.get_event_loop().run_in_executor(None, sys.stdin.readline)
 
-            # Small delay to ensure cookies are set
-            await page.wait_for_timeout(2000)
+            # Wait for JS to set all cookies (some platforms need extra time)
+            await page.wait_for_timeout(3000)
+
+            # Navigate to a logged-in page to ensure session cookies are set
+            # (Reddit sets reddit_session only after visiting authenticated pages)
+            try:
+                if "reddit.com" in (success_url_pattern or login_url):
+                    await page.goto("https://www.reddit.com/", wait_until="domcontentloaded", timeout=15000)
+                    await page.wait_for_timeout(3000)
+                elif "bilibili.com" in (success_url_pattern or login_url):
+                    await page.goto("https://www.bilibili.com/", wait_until="domcontentloaded", timeout=15000)
+                    await page.wait_for_timeout(2000)
+            except Exception:
+                pass  # Best effort — don't fail login if nav fails
 
             # Capture cookies
             cookies = await context.cookies()
