@@ -42,6 +42,25 @@ class RedditPlatform(Platform):
     SUCCESS_URL = "reddit.com"
 
     def login(self, account: str = "default", **kwargs) -> bool:
+        """Login to Reddit.
+
+        Strategy: extract cookies from local browser (Chrome/Firefox/Edge)
+        first. Falls back to Playwright browser login if extraction fails.
+        """
+        from socialcli.auth.cookie_store import save_cookies
+        from rich.console import Console
+        console = Console(stderr=True)
+
+        # Strategy 1: Extract from local browser (fast, gets reddit_session)
+        cred = self._extract_browser_cookies()
+        if cred:
+            cookie_list = [{"name": k, "value": v, "domain": ".reddit.com", "path": "/"} for k, v in cred.items()]
+            save_cookies(self.name, cookie_list, account)
+            console.print(f"[green]✔ Extracted {len(cookie_list)} cookies from local browser[/green]")
+            return True
+
+        # Strategy 2: Playwright (fallback)
+        console.print("[dim]Browser cookie extraction failed, opening Playwright login...[/dim]")
         headless = kwargs.get("headless", False)
         return browser_login(
             platform=self.name,
@@ -51,32 +70,51 @@ class RedditPlatform(Platform):
             headless=headless,
         )
 
+    @staticmethod
+    def _extract_browser_cookies() -> dict[str, str] | None:
+        """Extract Reddit cookies from installed browsers."""
+        try:
+            import browser_cookie3
+        except ImportError:
+            logger.debug("browser-cookie3 not installed")
+            return None
+
+        for fn in [browser_cookie3.chrome, browser_cookie3.firefox, browser_cookie3.edge, browser_cookie3.brave]:
+            try:
+                jar = fn(domain_name=".reddit.com")
+                cookies = {c.name: c.value for c in jar}
+                if "reddit_session" in cookies:
+                    logger.debug("Extracted %d cookies via %s", len(cookies), fn.__name__)
+                    return cookies
+            except Exception:
+                continue
+        return None
+
     def check_login(self, account: str = "default") -> bool:
         cookies = load_cookies(self.name, account)
         if not cookies:
             return False
         names = {c.get("name") for c in cookies}
-        return "reddit_session" in names or "token_v2" in names or len(cookies) > 5
+        return "reddit_session" in names
 
     def _get_headers(self, account: str = "default") -> dict:
         headers = super()._get_headers(account)
         headers["Accept"] = "application/json"
         return headers
 
-    def _get_oauth_headers(self, account: str = "default") -> dict:
-        """Build OAuth headers using token_v2 as bearer token."""
-        cookies = load_cookies(self.name, account) or []
-        token = next((c["value"] for c in cookies if c.get("name") == "token_v2"), "")
-        headers = {
-            "User-Agent": self.default_ua,
-            "Accept": "application/json",
-        }
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
-        return headers
+    def _modhash(self, account: str = "default") -> str:
+        """Get modhash for write operations (CSRF token)."""
+        headers = self._get_headers(account)
+        try:
+            resp = httpx.get(f"{BASE_URL}/api/me.json", headers=headers, timeout=10)
+            data = resp.json()
+            return data.get("data", {}).get("modhash", "")
+        except Exception as exc:
+            logger.debug("%s modhash: %s", self.name, exc)
+            return ""
 
     def publish(self, content: Content, account: str = "default") -> PublishResult:
-        """Submit a post to a subreddit via OAuth API."""
+        """Submit a post to a subreddit via cookie auth + modhash."""
         subreddit = content.extras.get("subreddit", "")
         if not subreddit:
             return PublishResult(
@@ -84,15 +122,14 @@ class RedditPlatform(Platform):
                 error="Reddit requires --subreddit / -r. Example: social reddit publish -t 'Title' -r programming",
             )
 
-        # Remove r/ prefix if present
         subreddit = subreddit.lstrip("r/").strip("/")
 
-        # Use OAuth API with bearer token (works with token_v2)
-        headers = self._get_oauth_headers(account)
-        if "Authorization" not in headers:
+        headers = self._get_headers(account)
+        modhash = self._modhash(account)
+        if not modhash:
             return PublishResult(
                 success=False, platform=self.name,
-                error="No auth token. Run: social login reddit",
+                error="Cannot get modhash. Cookie may be invalid. Run: social login reddit",
             )
 
         # Determine post type
@@ -108,6 +145,7 @@ class RedditPlatform(Platform):
             "kind": kind,
             "sr": subreddit,
             "title": content.title or content.text[:300],
+            "uh": modhash,
             "resubmit": "true",
         }
 
@@ -119,12 +157,11 @@ class RedditPlatform(Platform):
             data["url"] = content.images[0]
             data["kind"] = "link"
 
-        # Random delay before posting (anti-detection)
         time.sleep(random.uniform(1.0, 3.0))
 
         try:
             resp = httpx.post(
-                f"{OAUTH_URL}/api/submit",
+                f"{BASE_URL}/api/submit",
                 headers=headers,
                 data=data,
                 timeout=30,
@@ -216,13 +253,14 @@ class RedditPlatform(Platform):
             return []
 
     def like(self, target_id: str, account: str = "default", **kwargs) -> bool:
-        """Upvote a post via OAuth API."""
-        headers = self._get_oauth_headers(account)
+        """Upvote a post."""
+        headers = self._get_headers(account)
+        modhash = self._modhash(account)
         try:
             resp = httpx.post(
-                f"{OAUTH_URL}/api/vote",
+                f"{BASE_URL}/api/vote",
                 headers=headers,
-                data={"id": target_id, "dir": "1"},
+                data={"id": target_id, "dir": "1", "uh": modhash},
                 timeout=10,
             )
             return resp.status_code == 200
@@ -231,13 +269,14 @@ class RedditPlatform(Platform):
             return False
 
     def comment(self, target_id: str, text: str, account: str = "default", **kwargs) -> bool:
-        """Comment on a post via OAuth API."""
-        headers = self._get_oauth_headers(account)
+        """Comment on a post."""
+        headers = self._get_headers(account)
+        modhash = self._modhash(account)
         try:
             resp = httpx.post(
-                f"{OAUTH_URL}/api/comment",
+                f"{BASE_URL}/api/comment",
                 headers=headers,
-                data={"thing_id": target_id, "text": text, "api_type": "json"},
+                data={"thing_id": target_id, "text": text, "uh": modhash, "api_type": "json"},
                 timeout=10,
             )
             return resp.status_code == 200

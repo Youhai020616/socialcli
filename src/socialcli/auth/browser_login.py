@@ -84,17 +84,15 @@ async def _browser_login_async(
             # Wait for JS to set all cookies (some platforms need extra time)
             await page.wait_for_timeout(3000)
 
-            # Navigate to a logged-in page to ensure session cookies are set
-            # (Reddit sets reddit_session only after visiting authenticated pages)
+            # Platform-specific: navigate to auth-required pages to trigger
+            # full session cookie setup, then wait for authenticated state
             try:
                 if "reddit.com" in (success_url_pattern or login_url):
-                    await page.goto("https://www.reddit.com/", wait_until="domcontentloaded", timeout=15000)
-                    await page.wait_for_timeout(3000)
-                elif "bilibili.com" in (success_url_pattern or login_url):
-                    await page.goto("https://www.bilibili.com/", wait_until="domcontentloaded", timeout=15000)
-                    await page.wait_for_timeout(2000)
+                    # Reddit: visit settings page to force authenticated cookies
+                    await page.goto("https://www.reddit.com/settings/", wait_until="networkidle", timeout=20000)
+                    await page.wait_for_timeout(5000)
             except Exception:
-                pass  # Best effort — don't fail login if nav fails
+                pass  # Best effort
 
             # Capture cookies
             cookies = await context.cookies()
